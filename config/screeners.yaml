@@ -1,0 +1,154 @@
+# Screeners configuration
+# Replicates TradingView screeners
+
+screeners:
+  # CANSLIM - Growth + Technical setup
+  canslim:
+    description: "CANSLIM: Revenue growth >25%, EMA10>SMA20, Price<SMA50"
+    universe: us_market
+    requirements:
+      # Market cap: 150M to 1,500T USD
+      - field: market_cap
+        operator: ">="
+        value: 150000000  # 150M
+      - field: market_cap
+        operator: "<="
+        value: 1500000000000000  # 1,500T
+      # Revenue growth, Quarterly YoY > 25%
+      - field: revenue_growth
+        operator: ">="
+        value: 0.25  # 25%
+      # Avg Volume 60D > 800K
+      - field: volume_sma_60
+        operator: ">="
+        value: 800000
+      # ADR 3% to 1000%
+      - field: adr_pct
+        operator: ">="
+        value: 3
+      - field: adr_pct
+        operator: "<="
+        value: 1000
+      # EMA(10) > SMA(20)
+      - field: ema_10
+        operator: ">"
+        reference: sma_20
+      # Volume > 500K
+      - field: volume
+        operator: ">="
+        value: 500000
+      # Price < SMA(50)
+      - field: close
+        operator: "<"
+        reference: sma_50
+    postprocess:
+      sort_by: revenue_growth
+      sort_order: desc
+
+  # Alternative CANSLIM - EPS growth instead of Revenue
+  alternative_canslim:
+    description: "Alternative CANSLIM: EPS growth >25%, EMA10>SMA20, Price<SMA50"
+    universe: us_market
+    requirements:
+      # Market cap: 150M to 1,500T USD
+      - field: market_cap
+        operator: ">="
+        value: 150000000  # 150M
+      - field: market_cap
+        operator: "<="
+        value: 1500000000000000  # 1,500T
+      # EPS diluted growth, Quarterly YoY > 25%
+      - field: earnings_growth
+        operator: ">="
+        value: 0.25  # 25%
+      # Avg Volume 60D > 800K
+      - field: volume_sma_60
+        operator: ">="
+        value: 800000
+      # ADR 3% to 1000%
+      - field: adr_pct
+        operator: ">="
+        value: 3
+      - field: adr_pct
+        operator: "<="
+        value: 1000
+      # EMA(10) > SMA(20)
+      - field: ema_10
+        operator: ">"
+        reference: sma_20
+      # Volume > 500K
+      - field: volume
+        operator: ">="
+        value: 500000
+      # Price < SMA(50)
+      - field: close
+        operator: "<"
+        reference: sma_50
+    postprocess:
+      sort_by: earnings_growth
+      sort_order: desc
+
+  # Strongest 1M 50% - Extreme momentum
+  strongest_1m:
+    description: "Strongest 1M: Stocks up >50% in last month"
+    universe: us_market
+    requirements:
+      # Market cap: 300M to 3,000T USD
+      - field: market_cap
+        operator: ">="
+        value: 300000000  # 300M
+      - field: market_cap
+        operator: "<="
+        value: 3000000000000000  # 3,000T
+      # Volatility 1M > 5%
+      - field: volatility_1m
+        operator: ">="
+        value: 5
+      # Avg Volume 30D > 300K
+      - field: volume_sma_30
+        operator: ">="
+        value: 300000
+      # Volume > 100K
+      - field: volume
+        operator: ">="
+        value: 100000
+      # Perf 1M > 50%
+      - field: pct_change_1m
+        operator: ">="
+        value: 50
+    postprocess:
+      sort_by: pct_change_1m
+      sort_order: desc
+
+# Global settings
+settings:
+  # Combine results from multiple screeners
+  consolidation: union  # union | intersection
+
+  # Global exclusions (applied to final results)
+  exclude_symbols: []
+
+  # Remove duplicates in final output
+  deduplicate: true
+
+# =============================================================================
+# Field Reference
+# =============================================================================
+# Technical (calculated from OHLCV):
+#   - close, open, high, low, volume
+#   - sma_X (10, 20, 50, 100, 200)
+#   - ema_X (10, 20, 50)
+#   - rsi_14
+#   - volume_sma_X (20, 30, 60)
+#   - pct_change_Xd (1, 5, 20, 60)
+#   - pct_change_1m (≈21 trading days)
+#   - adr_pct (Average Daily Range as %)
+#   - volatility_1m (1-month volatility as %)
+#
+# Fundamentals (from yfinance, when available):
+#   - market_cap
+#   - pe_ratio
+#   - revenue_growth (quarterly YoY)
+#   - earnings_growth (EPS growth quarterly YoY)
+#   - profit_margin
+#   - debt_to_equity

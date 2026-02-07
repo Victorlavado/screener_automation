@@ -1,0 +1,152 @@
+# Universes configuration
+# Define sources of symbols to screen
+
+universes:
+  # ============================================================================
+  # US MARKETS
+  # ============================================================================
+
+  us_indices:
+    type: market
+    sources:
+      - sp500
+      - nasdaq100
+
+  us_complete:
+    type: market
+    sources:
+      - nasdaq_listed
+      - nyse_listed
+
+  us_extended:
+    type: market
+    sources:
+      - sp500
+      - nasdaq100
+      - russell3000
+
+  # ============================================================================
+  # EUROPEAN MARKETS
+  # ============================================================================
+
+  europe:
+    type: market
+    sources:
+      - ftse100      # UK
+      - dax          # Germany
+      - cac40        # France
+      - ibex35       # Spain
+      - ftsemib      # Italy
+      - bel20        # Belgium
+      - aex25        # Netherlands
+      - omxc25       # Denmark
+      - omxs30       # Sweden
+      - obx          # Norway
+
+  # ============================================================================
+  # ASIA-PACIFIC MARKETS
+  # ============================================================================
+
+  asia_pacific:
+    type: market
+    sources:
+      - nikkei225    # Japan
+      - hangseng     # Hong Kong
+      - kospi200     # South Korea
+      - china_a50    # China A-shares (Shanghai/Shenzhen)
+      - asx200       # Australia
+
+  # ============================================================================
+  # GLOBAL UNIVERSES
+  # ============================================================================
+
+  global_indices:
+    type: market
+    sources:
+      - sp500
+      - nasdaq100
+      - ftse100
+      - dax
+      - cac40
+      - ibex35
+      - ftsemib
+      - bel20
+      - aex25
+      - omxc25
+      - omxs30
+      - obx
+      - nikkei225
+      - hangseng
+      - kospi200
+      - china_a50
+      - asx200
+
+  global_all:
+    type: market
+    sources:
+      - nasdaq_listed
+      - nyse_listed
+      - ftse100
+      - dax
+      - cac40
+      - ibex35
+      - ftsemib
+      - bel20
+      - aex25
+      - omxc25
+      - omxs30
+      - obx
+      - nikkei225
+      - hangseng
+      - kospi200
+      - china_a50
+      - asx200
+
+  # ============================================================================
+  # CUSTOM / LOCAL
+  # ============================================================================
+
+  my_watchlists:
+    type: watchlist
+    files:
+      - watchlists/W1_base.txt
+      - watchlists/W2_quality.txt
+
+  curated:
+    type: manual
+    symbols:
+      - NASDAQ:AAPL
+      - NASDAQ:MSFT
+      - NYSE:JPM
+
+# Default universe to use if not specified in screener
+default_universe: global_all
+
+# =============================================================================
+# Available sources reference:
+# =============================================================================
+# US:
+#   sp500          S&P 500 (~500)
+#   nasdaq100      NASDAQ 100 (~100)
+#   nasdaq_listed  All NASDAQ (~3500)
+#   nyse_listed    All NYSE/AMEX (~3000)
+#   russell3000    Russell 3000 (~3000)
+#
+# Europe:
+#   ftse100        UK FTSE 100 (~100)
+#   dax            Germany DAX (~40)
+#   cac40          France CAC 40 (~40)
+#   ibex35         Spain IBEX 35 (~35)
+#   ftsemib        Italy FTSE MIB (~40)
+#   bel20          Belgium BEL 20 (~20)
+#   aex25          Netherlands AEX (~25)
+#   omxc25         Denmark OMX C25 (~25)
+#   omxs30         Sweden OMX S30 (~30)
+#   obx            Norway OBX (~25)
+#
+# Asia-Pacific:
+#   nikkei225      Japan Nikkei 225 (~225)
+#   hangseng       Hong Kong Hang Seng (~85)
+#   kospi200       South Korea KOSPI 200 (~200)
+#   china_a50      China FTSE A50 (~50)
+#   asx200         Australia ASX 200 (~200)

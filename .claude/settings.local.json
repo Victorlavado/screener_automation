@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:en.m.wikipedia.org)",
+      "WebFetch(domain:www.wikiwand.com)",
+      "WebFetch(domain:wiki2.org)",
+      "WebFetch(domain:wikipedia.nucleos.com)",
+      "WebFetch(domain:dbpedia.org)",
+      "WebFetch(domain:grokipedia.com)",
+      "Bash(uv run python:*)"
+    ]
+  }
+}
