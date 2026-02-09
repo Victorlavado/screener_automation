@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import List, Set, Dict, Any
 from io import StringIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import requests
 import yaml
@@ -1036,14 +1037,20 @@ def resolve_universe(universe_name: str, config: Dict[str, Any] = None) -> List[
     symbols: Set[str] = set()
 
     if universe_type == 'market':
-        # Fetch from market sources
+        # Fetch from market sources in parallel (I/O-bound HTTP requests)
         sources = universe_def.get('sources', [])
-        for source in sources:
-            if source in SOURCE_FETCHERS:
-                fetched = SOURCE_FETCHERS[source]()
-                symbols.update(fetched)
-            else:
-                print(f"Unknown market source: {source}")
+        valid = [(s, SOURCE_FETCHERS[s]) for s in sources if s in SOURCE_FETCHERS]
+        unknown = [s for s in sources if s not in SOURCE_FETCHERS]
+        for s in unknown:
+            print(f"Unknown market source: {s}")
+
+        with ThreadPoolExecutor(max_workers=len(valid) or 1) as executor:
+            futures = {executor.submit(fn): name for name, fn in valid}
+            for future in as_completed(futures):
+                try:
+                    symbols.update(future.result())
+                except Exception as e:
+                    print(f"Error fetching {futures[future]}: {e}")
 
     elif universe_type == 'watchlist':
         # Load from local watchlist files

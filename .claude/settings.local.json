@@ -8,7 +8,10 @@
       "WebFetch(domain:wikipedia.nucleos.com)",
       "WebFetch(domain:dbpedia.org)",
       "WebFetch(domain:grokipedia.com)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "Bash(git -C:*)",
+      "Bash(git -C \"C:\\\\Users\\\\victo\\\\Documentos\\\\Develop\\\\screener_automation\" push -u origin main)",
+      "Bash(uv add:*)"
     ]
   }
 }

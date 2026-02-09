@@ -5,7 +5,7 @@ screeners:
   # CANSLIM - Growth + Technical setup
   canslim:
     description: "CANSLIM: Revenue growth >25%, EMA10>SMA20, Price<SMA50"
-    universe: us_market
+    universe: us_complete
     requirements:
       # Market cap: 150M to 1,500T USD
       - field: market_cap
@@ -48,7 +48,7 @@ screeners:
   # Alternative CANSLIM - EPS growth instead of Revenue
   alternative_canslim:
     description: "Alternative CANSLIM: EPS growth >25%, EMA10>SMA20, Price<SMA50"
-    universe: us_market
+    universe: us_complete
     requirements:
       # Market cap: 150M to 1,500T USD
       - field: market_cap
@@ -91,7 +91,7 @@ screeners:
   # Strongest 1M 50% - Extreme momentum
   strongest_1m:
     description: "Strongest 1M: Stocks up >50% in last month"
-    universe: us_market
+    universe: us_complete
     requirements:
       # Market cap: 300M to 3,000T USD
       - field: market_cap

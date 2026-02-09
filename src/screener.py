@@ -8,6 +8,15 @@ import pandas as pd
 import yaml
 
 
+# Fields that come from yfinance .info (fundamentals download).
+# Everything else is a technical indicator computed from OHLCV.
+FUNDAMENTAL_FIELDS = {
+    'market_cap', 'pe_ratio', 'forward_pe', 'peg_ratio', 'price_to_book',
+    'dividend_yield', 'profit_margin', 'revenue_growth', 'earnings_growth',
+    'debt_to_equity', 'current_ratio', 'sector', 'industry',
+}
+
+
 def load_screeners_config(config_path: str = "config/screeners.yaml") -> Dict[str, Any]:
     """Load screeners configuration from YAML file."""
     with open(config_path, 'r') as f:
@@ -73,7 +82,8 @@ def evaluate_condition(
 
 def apply_screener(
     df: pd.DataFrame,
-    screener_def: Dict[str, Any]
+    screener_def: Dict[str, Any],
+    allowed_tickers: Optional[Set[str]] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Apply a single screener definition to indicator data.
@@ -81,10 +91,14 @@ def apply_screener(
     Args:
         df: DataFrame with all indicators
         screener_def: Screener definition from config
+        allowed_tickers: If provided, restrict to only these tickers before filtering
 
     Returns:
         Tuple of (filtered DataFrame, boolean mask of passing symbols)
     """
+    if allowed_tickers is not None:
+        df = df.loc[df.index.isin(allowed_tickers)]
+
     requirements = screener_def.get('requirements', [])
 
     # Start with all True
@@ -116,9 +130,67 @@ def apply_screener(
     return filtered_df, mask
 
 
+def _split_requirements(requirements: List[Dict[str, Any]]) -> Tuple[List[Dict], List[Dict]]:
+    """Split requirements into (technical, fundamental) based on field names."""
+    tech, fund = [], []
+    for req in requirements:
+        field = req.get('field', '')
+        ref = req.get('reference', '')
+        if field in FUNDAMENTAL_FIELDS or ref in FUNDAMENTAL_FIELDS:
+            fund.append(req)
+        else:
+            tech.append(req)
+    return tech, fund
+
+
+def needs_fundamentals(config: Dict[str, Any] = None) -> bool:
+    """Return True if any screener uses fundamental fields."""
+    if config is None:
+        config = load_screeners_config()
+    for sdef in config.get('screeners', {}).values():
+        _, fund = _split_requirements(sdef.get('requirements', []))
+        if fund:
+            return True
+    return False
+
+
+def get_prescreen_candidates(
+    indicators_df: pd.DataFrame,
+    config: Dict[str, Any] = None,
+    universe_tickers: Dict[str, Set[str]] = None,
+) -> Set[str]:
+    """Apply only technical conditions from all screeners to narrow candidates.
+
+    Returns the union of tickers that pass the technical-only pre-screen for
+    each screener.  These are the only tickers that need fundamentals.
+    """
+    if config is None:
+        config = load_screeners_config()
+    universe_tickers = universe_tickers or {}
+
+    candidates: Set[str] = set()
+
+    for sname, sdef in config.get('screeners', {}).items():
+        tech_reqs, fund_reqs = _split_requirements(sdef.get('requirements', []))
+
+        if not fund_reqs:
+            # Screener has no fundamental conditions — skip pre-screen,
+            # fundamentals aren't needed for this screener at all.
+            continue
+
+        # Build a technical-only screener definition
+        tech_def = {**sdef, 'requirements': tech_reqs, 'postprocess': {}}
+        allowed = universe_tickers.get(sname)
+        filtered_df, _ = apply_screener(indicators_df, tech_def, allowed)
+        candidates.update(filtered_df.index.tolist())
+
+    return candidates
+
+
 def run_all_screeners(
     indicators_df: pd.DataFrame,
-    config: Dict[str, Any] = None
+    config: Dict[str, Any] = None,
+    universe_tickers: Dict[str, Set[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Run all screeners and collect results with traceability.
@@ -126,6 +198,9 @@ def run_all_screeners(
     Args:
         indicators_df: DataFrame with computed indicators
         config: Screeners config (loaded if not provided)
+        universe_tickers: Optional mapping of screener_name -> set of allowed
+            tickers for that screener. When provided, each screener is restricted
+            to its own universe before applying filters.
 
     Returns:
         Dict with results per screener and traceability info
@@ -133,13 +208,20 @@ def run_all_screeners(
     if config is None:
         config = load_screeners_config()
 
+    universe_tickers = universe_tickers or {}
     screeners = config.get('screeners', {})
     results = {}
 
     for screener_name, screener_def in screeners.items():
-        print(f"Running screener: {screener_name}")
+        allowed = universe_tickers.get(screener_name)
+        universe_label = screener_def.get('universe', 'default')
 
-        filtered_df, mask = apply_screener(indicators_df, screener_def)
+        if allowed is not None:
+            print(f"Running screener: {screener_name}  (universe: {universe_label}, {len(allowed)} tickers)")
+        else:
+            print(f"Running screener: {screener_name}  (universe: all {len(indicators_df)} tickers)")
+
+        filtered_df, mask = apply_screener(indicators_df, screener_def, allowed)
 
         results[screener_name] = {
             'description': screener_def.get('description', ''),
