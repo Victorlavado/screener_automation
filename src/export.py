@@ -12,6 +12,76 @@ import pandas as pd
 
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 
+# Yahoo Finance exchange suffixes that must be stripped for TradingView.
+# TradingView identifies the exchange via the prefix (e.g. EURONEXT:DG),
+# so the Yahoo suffix (e.g. .PA) is redundant and causes import failures.
+YAHOO_SUFFIXES = frozenset({
+    '.PA',  # Euronext Paris
+    '.AS',  # Euronext Amsterdam
+    '.BR',  # Euronext Brussels
+    '.OL',  # Oslo Børs
+    '.DE',  # XETRA (Germany)
+    '.L',   # London Stock Exchange
+    '.MI',  # Borsa Italiana (Milan)
+    '.MC',  # Bolsa de Madrid
+    '.ST',  # OMX Stockholm
+    '.CO',  # OMX Copenhagen
+    '.AX',  # ASX (Australia)
+    '.T',   # TSE (Tokyo)
+    '.HK',  # HKEX (Hong Kong)
+    '.KS',  # KRX (Korea)
+    '.SS',  # SSE (Shanghai)
+    '.SZ',  # SZSE (Shenzhen)
+})
+
+# Internal exchange prefix -> TradingView exchange prefix.
+# Only entries that differ are listed; unlisted codes pass through as-is.
+_TV_EXCHANGE_MAP = {
+    'EPA': 'EURONEXT',   # Euronext Paris
+    'AMS': 'EURONEXT',   # Euronext Amsterdam
+    'EBR': 'EURONEXT',   # Euronext Brussels
+    'STO': 'OMXSTO',     # OMX Stockholm
+    'CPH': 'OMXCOP',     # OMX Copenhagen
+}
+
+
+def _strip_yahoo_suffix(ticker: str) -> str:
+    """Strip Yahoo Finance exchange suffix from a ticker symbol.
+
+    Examples:
+        DG.PA   -> DG
+        EQNR.OL -> EQNR
+        AAPL    -> AAPL  (no suffix, unchanged)
+    """
+    if not ticker:
+        return ticker
+    dot_pos = ticker.rfind('.')
+    if dot_pos > 0:
+        suffix = ticker[dot_pos:]
+        if suffix in YAHOO_SUFFIXES:
+            return ticker[:dot_pos]
+    return ticker
+
+
+def _map_tv_exchange(exchange: str) -> str:
+    """Map an internal exchange code to its TradingView equivalent."""
+    return _TV_EXCHANGE_MAP.get(exchange, exchange)
+
+
+def _to_tradingview_symbol(ticker: str, exchange: str) -> str:
+    """Convert an internal ticker + exchange to TradingView format.
+
+    Strips Yahoo suffix and maps the exchange prefix.
+
+    Examples:
+        ("DG.PA", "EPA")    -> "EURONEXT:DG"
+        ("EQNR.OL", "OSL") -> "OSL:EQNR"
+        ("AAPL", "NASDAQ")  -> "NASDAQ:AAPL"
+    """
+    tv_ticker = _strip_yahoo_suffix(ticker)
+    tv_exchange = _map_tv_exchange(exchange)
+    return f"{tv_exchange}:{tv_ticker}"
+
 
 def ensure_output_dir():
     """Create output directory if it doesn't exist."""
@@ -52,7 +122,7 @@ def export_tradingview_watchlist(
     tv_symbols = []
     for symbol in symbols:
         exchange = symbol_to_exchange.get(symbol, 'NYSE')
-        tv_symbols.append(f"{exchange}:{symbol}")
+        tv_symbols.append(_to_tradingview_symbol(symbol, exchange))
 
     # Write comma-separated
     content = ','.join(tv_symbols)
