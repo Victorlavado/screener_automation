@@ -223,60 +223,79 @@ def run_pipeline(
 
     # ------------------------------------------------------------------
     # Stage 3: Compute technical indicators (no fundamentals yet)
+    # Stage 4: Download fundamentals + merge
+    #
+    # Resume branches:
+    #   1. "indicators" done  → skip both stages, load merged file
+    #   2. "indicators_pure" done → skip stage 3, run stage 4 + merge
+    #   3. Neither → run both
     # ------------------------------------------------------------------
     indicators_path = ckpt_dir / "indicators.parquet"
-
-    if resume and _stage_done(ckpt_dir, "indicators") and indicators_path.exists():
-        logger.info("[Stage 3/5] Loading indicators from checkpoint...")
-        indicators_df = pd.read_parquet(indicators_path)
-        logger.info(f"Loaded indicators for {len(indicators_df)} symbols")
-    else:
-        logger.info("[Stage 3/5] Computing technical indicators...")
-        indicators_df = compute_all_indicators(ohlcv_data)
-        logger.info(f"Computed indicators for {len(indicators_df)} symbols")
-
-    # ------------------------------------------------------------------
-    # Stage 4: Download fundamentals (only for pre-screened candidates)
-    # ------------------------------------------------------------------
     fundamentals_path = ckpt_dir / "fundamentals.parquet"
 
-    if resume and _stage_done(ckpt_dir, "fundamentals") and fundamentals_path.exists():
-        logger.info("[Stage 4/5] Loading fundamentals from checkpoint...")
-        fundamentals_data = pd.read_parquet(fundamentals_path)
-        logger.info(f"Loaded fundamentals for {len(fundamentals_data)} symbols")
+    if resume and _stage_done(ckpt_dir, "indicators") and indicators_path.exists():
+        # Branch 1: fully merged indicators already saved
+        logger.info("[Stage 3-4/5] Loading merged indicators from checkpoint...")
+        indicators_df = pd.read_parquet(indicators_path)
+        logger.info(f"Loaded merged indicators for {len(indicators_df)} symbols")
+
     else:
-        any_needs_fund = needs_fundamentals(screeners_config)
-
-        if any_needs_fund:
-            # Pre-screen: apply technical-only filters to find candidates
-            candidates = get_prescreen_candidates(
-                indicators_df, screeners_config, screener_tickers
-            )
-            logger.info(
-                f"[Stage 4/5] Pre-screen: {len(candidates)} candidates need fundamentals "
-                f"(vs {len(indicators_df)} total)"
-            )
-
-            fundamentals_data = download_fundamentals(
-                list(candidates),
-                show_progress=verbose,
-            )
-            logger.info(f"Downloaded fundamentals for {len(fundamentals_data)} symbols")
+        # Compute pure indicators (or load from checkpoint)
+        if resume and _stage_done(ckpt_dir, "indicators_pure") and indicators_path.exists():
+            # Branch 2: pure indicators saved, but fundamentals merge didn't finish
+            logger.info("[Stage 3/5] Loading pure indicators from checkpoint...")
+            indicators_df = pd.read_parquet(indicators_path)
+            logger.info(f"Loaded pure indicators for {len(indicators_df)} symbols")
         else:
-            logger.info("[Stage 4/5] No screener uses fundamental fields — skipping download")
-            fundamentals_data = pd.DataFrame()
+            # Branch 3: compute from scratch
+            logger.info("[Stage 3/5] Computing technical indicators...")
+            indicators_df = compute_all_indicators(ohlcv_data)
+            logger.info(f"Computed indicators for {len(indicators_df)} symbols")
 
+            # Save pure indicators checkpoint BEFORE fundamentals
+            if not indicators_df.empty:
+                indicators_df.to_parquet(indicators_path)
+            _mark_stage(ckpt_dir, "indicators_pure")
+
+        # Download fundamentals (or load from checkpoint)
+        if resume and _stage_done(ckpt_dir, "fundamentals") and fundamentals_path.exists():
+            logger.info("[Stage 4/5] Loading fundamentals from checkpoint...")
+            fundamentals_data = pd.read_parquet(fundamentals_path)
+            logger.info(f"Loaded fundamentals for {len(fundamentals_data)} symbols")
+        else:
+            any_needs_fund = needs_fundamentals(screeners_config)
+
+            if any_needs_fund:
+                # Pre-screen: apply technical-only filters to find candidates
+                candidates = get_prescreen_candidates(
+                    indicators_df, screeners_config, screener_tickers
+                )
+                logger.info(
+                    f"[Stage 4/5] Pre-screen: {len(candidates)} candidates need fundamentals "
+                    f"(vs {len(indicators_df)} total)"
+                )
+
+                fundamentals_data = download_fundamentals(
+                    list(candidates),
+                    show_progress=verbose,
+                )
+                logger.info(f"Downloaded fundamentals for {len(fundamentals_data)} symbols")
+            else:
+                logger.info("[Stage 4/5] No screener uses fundamental fields — skipping download")
+                fundamentals_data = pd.DataFrame()
+
+            if not fundamentals_data.empty:
+                fundamentals_data.to_parquet(fundamentals_path)
+            _mark_stage(ckpt_dir, "fundamentals")
+
+        # Merge fundamentals into indicators
         if not fundamentals_data.empty:
-            fundamentals_data.to_parquet(fundamentals_path)
-        _mark_stage(ckpt_dir, "fundamentals")
+            indicators_df = indicators_df.join(fundamentals_data, how='left')
 
-    # Merge fundamentals into indicators
-    if not fundamentals_data.empty:
-        indicators_df = indicators_df.join(fundamentals_data, how='left')
-
-    if not indicators_df.empty:
-        indicators_df.to_parquet(indicators_path)
-    _mark_stage(ckpt_dir, "indicators")
+        # Save merged indicators and mark as complete
+        if not indicators_df.empty:
+            indicators_df.to_parquet(indicators_path)
+        _mark_stage(ckpt_dir, "indicators")
 
     # ------------------------------------------------------------------
     # Stage 5: Screen + export

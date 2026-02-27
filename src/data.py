@@ -3,13 +3,16 @@ Data download module.
 Handles fetching OHLCV and fundamental data from yfinance.
 """
 
+import json
 import logging
+import math
 import time
 import re
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
 import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
@@ -75,6 +78,62 @@ def _save_ohlcv_cache(
                 pass  # Non-critical, skip silently
 
 
+def _load_failed_tickers_cache(
+    period: str,
+    interval: str,
+    max_age_days: float = 7.0,
+) -> Dict[str, float]:
+    """Load the negative cache of permanently-failed (delisted) tickers.
+
+    Returns dict of {ticker: timestamp} for entries younger than max_age_days.
+    """
+    cache_dir = _get_ohlcv_cache_dir(period, interval)
+    cache_file = cache_dir / "failed_tickers.json"
+
+    if not cache_file.exists():
+        return {}
+
+    try:
+        with open(cache_file, "r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    now = time.time()
+    max_age_seconds = max_age_days * 86400
+    return {
+        ticker: ts
+        for ticker, ts in data.items()
+        if (now - ts) < max_age_seconds
+    }
+
+
+def _save_failed_tickers_cache(
+    failed: Dict[str, float],
+    period: str,
+    interval: str,
+) -> None:
+    """Persist failed tickers to the negative cache (merge, don't overwrite)."""
+    cache_dir = _get_ohlcv_cache_dir(period, interval)
+    cache_file = cache_dir / "failed_tickers.json"
+
+    existing = {}
+    if cache_file.exists():
+        try:
+            with open(cache_file, "r") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    existing.update(failed)
+
+    try:
+        with open(cache_file, "w") as f:
+            json.dump(existing, f, indent=2)
+    except OSError:
+        pass
+
+
 def _is_rate_limit_error(error: Exception) -> bool:
     """Check if an exception indicates a Yahoo Finance rate limit."""
     msg = str(error).lower()
@@ -126,6 +185,14 @@ def download_ohlcv_batch(
     # Determine which tickers still need downloading
     remaining = [t for t in tickers if t not in results]
 
+    # Filter out tickers known to be delisted / permanently failed
+    neg_cache = _load_failed_tickers_cache(period, interval)
+    if neg_cache:
+        skipped = [t for t in remaining if t in neg_cache]
+        if skipped:
+            logger.info("Skipping %d delisted/failed tickers from negative cache", len(skipped))
+        remaining = [t for t in remaining if t not in neg_cache]
+
     if not remaining:
         logger.info("All tickers served from cache, no downloads needed")
         return results
@@ -139,6 +206,7 @@ def download_ohlcv_batch(
 
     fresh = {}
     total_failed = []
+    newly_failed = {}  # tickers to add to negative cache
 
     for batch in iterator:
         batch_success = False
@@ -172,6 +240,23 @@ def download_ohlcv_batch(
                 # (> 50% missing suggests rate limiting)
                 expected = len(batch)
                 got = len(batch_results)
+
+                # If got == 0 on a retry attempt, mark all batch tickers as
+                # likely delisted and skip further retries for this batch
+                if got == 0 and attempt > 0:
+                    logger.warning(
+                        "Batch returned 0/%d tickers on retry %d — "
+                        "marking as delisted: %s",
+                        expected, attempt,
+                        ", ".join(batch[:10]) + ("..." if len(batch) > 10 else ""),
+                    )
+                    now = time.time()
+                    for t in batch:
+                        newly_failed[t] = now
+                    total_failed.extend(batch)
+                    batch_success = True
+                    break
+
                 if got < expected * 0.5 and attempt < max_retries:
                     wait = 30 * (2 ** attempt)
                     logger.warning(
@@ -228,6 +313,10 @@ def download_ohlcv_batch(
     # Persist newly downloaded data
     if fresh and cache_max_age_hours > 0:
         _save_ohlcv_cache(fresh, period, interval)
+
+    # Persist newly failed tickers to negative cache
+    if newly_failed:
+        _save_failed_tickers_cache(newly_failed, period, interval)
 
     results.update(fresh)
 
@@ -289,8 +378,34 @@ def _save_fundamentals_cache(fundamentals: List[Dict]) -> None:
             pass  # Non-critical
 
 
-def _fetch_single_fundamental(ticker: str, max_retries: int = 2, retry_delay: float = 5.0) -> Optional[Dict]:
-    """Fetch fundamental data for a single ticker with retry logic.
+def _sanitize_fundamentals_value(val):
+    """Sanitize a single value from yfinance .info dict.
+
+    Converts problematic values (Infinity strings, float inf/nan) to None
+    so that downstream parquet serialization and numeric casts succeed.
+    """
+    if val is None:
+        return None
+    if isinstance(val, str):
+        if val in ("Infinity", "-Infinity", "NaN"):
+            return None
+        return val
+    try:
+        if math.isinf(val) or math.isnan(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return val
+
+
+def _is_crumb_error(error: Exception) -> bool:
+    """Check if an exception indicates an invalid crumb / 401 auth error."""
+    msg = str(error).lower()
+    return any(term in msg for term in ("invalid crumb", "401", "unauthorized"))
+
+
+def _fetch_single_fundamental(ticker: str, max_retries: int = 4, retry_delay: float = 2.0) -> Optional[Dict]:
+    """Fetch fundamental data for a single ticker with exponential backoff.
 
     Returns None on failure after all retries exhausted.
     """
@@ -298,7 +413,7 @@ def _fetch_single_fundamental(ticker: str, max_retries: int = 2, retry_delay: fl
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
-            return {
+            raw = {
                 'ticker': ticker,
                 'market_cap': info.get('marketCap'),
                 'pe_ratio': info.get('trailingPE'),
@@ -314,13 +429,21 @@ def _fetch_single_fundamental(ticker: str, max_retries: int = 2, retry_delay: fl
                 'sector': info.get('sector'),
                 'industry': info.get('industry'),
             }
+            return {k: _sanitize_fundamentals_value(v) for k, v in raw.items()}
         except Exception as e:
             if attempt < max_retries:
-                logger.debug(
-                    "Fundamentals fetch failed for %s: %s — retrying in %.0fs (%d/%d)",
-                    ticker, e, retry_delay, attempt + 1, max_retries,
-                )
-                time.sleep(retry_delay)
+                delay = retry_delay * (2 ** attempt)
+                if _is_crumb_error(e):
+                    logger.debug(
+                        "Crumb/auth error for %s: %s — retrying in %.0fs (%d/%d)",
+                        ticker, e, delay, attempt + 1, max_retries,
+                    )
+                else:
+                    logger.debug(
+                        "Fundamentals fetch failed for %s: %s — retrying in %.0fs (%d/%d)",
+                        ticker, e, delay, attempt + 1, max_retries,
+                    )
+                time.sleep(delay)
             else:
                 logger.warning("Fundamentals fetch failed for %s after %d retries: %s", ticker, max_retries, e)
                 return None
@@ -329,7 +452,7 @@ def _fetch_single_fundamental(ticker: str, max_retries: int = 2, retry_delay: fl
 def download_fundamentals(
     tickers: List[str],
     show_progress: bool = True,
-    max_workers: int = 4,
+    max_workers: int = 2,
     cache_max_age_days: float = 7.0,
 ) -> pd.DataFrame:
     """
@@ -373,8 +496,8 @@ def download_fundamentals(
         for ticker in remaining:
             future = executor.submit(_fetch_single_fundamental, ticker)
             futures[future] = ticker
-            # Small delay between submissions to avoid burst requests
-            time.sleep(0.5)
+            # Delay between submissions to avoid burst requests / rate limiting
+            time.sleep(1.0)
 
         iterator = as_completed(futures)
         if show_progress:
@@ -401,7 +524,13 @@ def download_fundamentals(
         success, total, failed_count, cached_count,
     )
 
-    return pd.DataFrame(fundamentals).set_index('ticker') if fundamentals else pd.DataFrame()
+    if fundamentals:
+        df = pd.DataFrame(fundamentals).set_index('ticker')
+        # Safety net: replace any remaining inf values in numeric columns
+        numeric_cols = df.select_dtypes(include='number').columns
+        df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
+        return df
+    return pd.DataFrame()
 
 
 def download_all_data(
