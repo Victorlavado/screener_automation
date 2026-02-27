@@ -231,6 +231,7 @@ def run_pipeline(
     #   3. Neither → run both
     # ------------------------------------------------------------------
     indicators_path = ckpt_dir / "indicators.parquet"
+    indicators_pure_path = ckpt_dir / "indicators_pure.parquet"
     fundamentals_path = ckpt_dir / "fundamentals.parquet"
 
     if resume and _stage_done(ckpt_dir, "indicators") and indicators_path.exists():
@@ -241,10 +242,10 @@ def run_pipeline(
 
     else:
         # Compute pure indicators (or load from checkpoint)
-        if resume and _stage_done(ckpt_dir, "indicators_pure") and indicators_path.exists():
+        if resume and _stage_done(ckpt_dir, "indicators_pure") and indicators_pure_path.exists():
             # Branch 2: pure indicators saved, but fundamentals merge didn't finish
             logger.info("[Stage 3/5] Loading pure indicators from checkpoint...")
-            indicators_df = pd.read_parquet(indicators_path)
+            indicators_df = pd.read_parquet(indicators_pure_path)
             logger.info(f"Loaded pure indicators for {len(indicators_df)} symbols")
         else:
             # Branch 3: compute from scratch
@@ -254,7 +255,7 @@ def run_pipeline(
 
             # Save pure indicators checkpoint BEFORE fundamentals
             if not indicators_df.empty:
-                indicators_df.to_parquet(indicators_path)
+                indicators_df.to_parquet(indicators_pure_path)
             _mark_stage(ckpt_dir, "indicators_pure")
 
         # Download fundamentals (or load from checkpoint)

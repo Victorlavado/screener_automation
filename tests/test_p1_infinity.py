@@ -114,3 +114,40 @@ def test_dataframe_to_parquet_succeeds(mock_ticker_cls, tmp_path):
     reloaded = pd.read_parquet(output_path)
     assert reloaded.loc["TEST", "pe_ratio"] is None or pd.isna(reloaded.loc["TEST", "pe_ratio"])
     assert reloaded.loc["TEST", "forward_pe"] is None or pd.isna(reloaded.loc["TEST", "forward_pe"])
+
+
+@patch("src.data._load_fundamentals_cache")
+def test_cached_string_infinity_sanitized(mock_cache):
+    """Stale cache with string 'Infinity' in object columns is sanitized at DataFrame level."""
+    mock_cache.return_value = {
+        "CNDT": {
+            "ticker": "CNDT",
+            "market_cap": 500_000,
+            "pe_ratio": 12.0,
+            "forward_pe": "Infinity",
+            "peg_ratio": "-Infinity",
+            "price_to_book": 2.0,
+            "dividend_yield": 0.01,
+            "profit_margin": 0.10,
+            "revenue_growth": "NaN",
+            "earnings_growth": 0.05,
+            "debt_to_equity": 40.0,
+            "current_ratio": 1.2,
+            "sector": "Technology",
+            "industry": "IT Services",
+        }
+    }
+
+    df = download_fundamentals(
+        ["CNDT"],
+        show_progress=False,
+        cache_max_age_days=7,
+    )
+
+    # String "Infinity" / "-Infinity" / "NaN" should be replaced with None/NaN
+    assert pd.isna(df.loc["CNDT", "forward_pe"]) or df.loc["CNDT", "forward_pe"] is None
+    assert pd.isna(df.loc["CNDT", "peg_ratio"]) or df.loc["CNDT", "peg_ratio"] is None
+    assert pd.isna(df.loc["CNDT", "revenue_growth"]) or df.loc["CNDT", "revenue_growth"] is None
+    # Normal values should be preserved
+    assert df.loc["CNDT", "market_cap"] == 500_000
+    assert df.loc["CNDT", "sector"] == "Technology"

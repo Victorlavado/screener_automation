@@ -484,7 +484,18 @@ def download_fundamentals(
 
     if not remaining:
         logger.info("All fundamentals served from cache, no downloads needed")
-        return pd.DataFrame(fundamentals).set_index('ticker') if fundamentals else pd.DataFrame()
+        if fundamentals:
+            df = pd.DataFrame(fundamentals).set_index('ticker')
+            # Sanitize string infinity/nan in object columns (from stale cache)
+            obj_cols = df.select_dtypes(include='object').columns
+            for col in obj_cols:
+                df[col] = df[col].replace(
+                    {"Infinity": None, "-Infinity": None, "NaN": None}
+                )
+            numeric_cols = df.select_dtypes(include='number').columns
+            df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
+            return df
+        return pd.DataFrame()
 
     logger.info("Downloading fundamentals for %d tickers (%d cached)", len(remaining), cached_count)
 
@@ -526,6 +537,12 @@ def download_fundamentals(
 
     if fundamentals:
         df = pd.DataFrame(fundamentals).set_index('ticker')
+        # Sanitize string infinity/nan in object columns (from stale cache)
+        obj_cols = df.select_dtypes(include='object').columns
+        for col in obj_cols:
+            df[col] = df[col].replace(
+                {"Infinity": None, "-Infinity": None, "NaN": None}
+            )
         # Safety net: replace any remaining inf values in numeric columns
         numeric_cols = df.select_dtypes(include='number').columns
         df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
