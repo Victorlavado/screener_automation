@@ -187,6 +187,22 @@ def get_prescreen_candidates(
     return candidates
 
 
+def split_screener_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Split screener config into regular screeners and post-filters.
+
+    Returns:
+        Tuple of (regular_config, post_filter_config) — each is a full config
+        dict with a 'screeners' key containing only the relevant screeners.
+    """
+    screeners = config.get('screeners', {})
+    regular = {k: v for k, v in screeners.items() if not v.get('post_filter', False)}
+    post = {k: v for k, v in screeners.items() if v.get('post_filter', False)}
+
+    regular_config = {**config, 'screeners': regular}
+    post_config = {**config, 'screeners': post}
+    return regular_config, post_config
+
+
 def run_all_screeners(
     indicators_df: pd.DataFrame,
     config: Dict[str, Any] = None,

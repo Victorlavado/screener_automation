@@ -57,6 +57,26 @@ universes:
       - asx200       # Australia
 
   # ============================================================================
+  # US + EUROPE COMBINED
+  # ============================================================================
+
+  us_eu:
+    type: market
+    sources:
+      - nasdaq_listed
+      - nyse_listed
+      - ftse100      # UK
+      - dax          # Germany
+      - cac40        # France
+      - ibex35       # Spain
+      - ftsemib      # Italy
+      - bel20        # Belgium
+      - aex25        # Netherlands
+      - omxc25       # Denmark
+      - omxs30       # Sweden
+      - obx          # Norway
+
+  # ============================================================================
   # GLOBAL UNIVERSES
   # ============================================================================
 

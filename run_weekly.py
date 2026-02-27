@@ -42,6 +42,7 @@ from src.screener import (
     build_report_dataframe,
     needs_fundamentals,
     get_prescreen_candidates,
+    split_screener_config,
 )
 from src.export import export_all
 
@@ -168,6 +169,11 @@ def run_pipeline(
     resolved_cache: dict = {}     # universe_name -> set(symbols)  (avoid re-resolving)
 
     for sname, sdef in screener_defs.items():
+        # Post-filter screeners don't resolve their own universe;
+        # they run on the consolidated results of regular screeners.
+        if sdef.get('post_filter', False):
+            continue
+
         uname = sdef.get('universe', default_universe)
         # Fall back to default if universe doesn't exist
         if uname not in available_universes:
@@ -285,20 +291,70 @@ def run_pipeline(
         }
         logger.info(f"Running selected screeners: {list(screeners_config['screeners'].keys())}")
 
-    screener_results = run_all_screeners(
-        indicators_df, screeners_config, universe_tickers=screener_tickers
-    )
+    # Split into regular screeners and post-filters
+    regular_config, post_filter_config = split_screener_config(screeners_config)
+    has_post_filters = bool(post_filter_config.get('screeners'))
 
     settings = screeners_config.get('settings', {})
     consolidation_method = settings.get('consolidation', 'union')
     exclude_symbols = settings.get('exclude_symbols', [])
 
-    logger.info(f"Consolidating results (method: {consolidation_method})...")
-    final_symbols, traceability = consolidate_results(
-        screener_results,
-        method=consolidation_method,
-        exclude_symbols=exclude_symbols,
-    )
+    # --- Run regular screeners ---
+    if regular_config.get('screeners'):
+        logger.info(f"Running {len(regular_config['screeners'])} regular screener(s)...")
+        screener_results = run_all_screeners(
+            indicators_df, regular_config, universe_tickers=screener_tickers
+        )
+
+        logger.info(f"Consolidating regular results (method: {consolidation_method})...")
+        regular_symbols, regular_trace = consolidate_results(
+            screener_results,
+            method=consolidation_method,
+            exclude_symbols=exclude_symbols,
+        )
+        logger.info(f"Regular screeners: {len(regular_symbols)} symbols")
+    else:
+        screener_results = {}
+        regular_symbols, regular_trace = [], {}
+
+    # --- Run post-filters on the regular results ---
+    if has_post_filters and regular_symbols:
+        logger.info(f"Running {len(post_filter_config['screeners'])} post-filter(s) "
+                     f"on {len(regular_symbols)} pre-filtered symbols...")
+
+        # Post-filters operate on the tickers that passed regular screeners
+        post_filter_tickers = {
+            name: set(regular_symbols)
+            for name in post_filter_config['screeners']
+        }
+
+        post_results = run_all_screeners(
+            indicators_df, post_filter_config, universe_tickers=post_filter_tickers
+        )
+
+        # Final symbols = union of post-filter results
+        final_symbols, post_trace = consolidate_results(
+            post_results,
+            method='union',
+            exclude_symbols=exclude_symbols,
+        )
+
+        # Merge traceability: include both regular and post-filter screener info
+        traceability = {}
+        for sym in final_symbols:
+            screeners_passed = regular_trace.get(sym, []) + post_trace.get(sym, [])
+            traceability[sym] = screeners_passed
+
+        # Combine all results for reporting
+        screener_results.update(post_results)
+        logger.info(f"Post-filters: {len(final_symbols)} symbols in final list")
+    elif has_post_filters and not regular_symbols:
+        logger.warning("No symbols from regular screeners — skipping post-filters")
+        final_symbols, traceability = [], {}
+    else:
+        # No post-filters defined — regular results are final
+        final_symbols, traceability = regular_symbols, regular_trace
+
     logger.info(f"Final consolidated list: {len(final_symbols)} symbols")
 
     report_df = build_report_dataframe(

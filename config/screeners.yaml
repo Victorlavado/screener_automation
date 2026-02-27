@@ -5,7 +5,7 @@ screeners:
   # CANSLIM - Growth + Technical setup
   canslim:
     description: "CANSLIM: Revenue growth >25%, EMA10>SMA20, Price<SMA50"
-    universe: us_complete
+    universe: us_eu
     requirements:
       # Market cap: 150M to 1,500T USD
       - field: market_cap
@@ -48,7 +48,7 @@ screeners:
   # Alternative CANSLIM - EPS growth instead of Revenue
   alternative_canslim:
     description: "Alternative CANSLIM: EPS growth >25%, EMA10>SMA20, Price<SMA50"
-    universe: us_complete
+    universe: us_eu
     requirements:
       # Market cap: 150M to 1,500T USD
       - field: market_cap
@@ -91,7 +91,7 @@ screeners:
   # Strongest 1M 50% - Extreme momentum
   strongest_1m:
     description: "Strongest 1M: Stocks up >50% in last month"
-    universe: us_complete
+    universe: us_eu
     requirements:
       # Market cap: 300M to 3,000T USD
       - field: market_cap
@@ -120,6 +120,155 @@ screeners:
       sort_by: pct_change_1m
       sort_order: desc
 
+  # =========================================================================
+  # MOMENTUM SCREENERS (US + EU)
+  # =========================================================================
+
+  # Strongest 1M 30%
+  strongest_1m_30:
+    description: "Strongest 1M 30%: Stocks up >30% in last month (US+EU)"
+    universe: us_eu
+    requirements:
+      - field: market_cap
+        operator: ">="
+        value: 300000000  # 300M
+      - field: market_cap
+        operator: "<="
+        value: 3000000000000000  # 3,000T
+      - field: volatility_1m
+        operator: ">="
+        value: 5
+      - field: volume_sma_30
+        operator: ">="
+        value: 300000
+      - field: volume
+        operator: ">="
+        value: 100000
+      - field: pct_change_1m
+        operator: ">="
+        value: 30
+    postprocess:
+      sort_by: pct_change_1m
+      sort_order: desc
+
+  # Strongest 3M 50%
+  strongest_3m_50:
+    description: "Strongest 3M 50%: Stocks up >50% in last 3 months (US+EU)"
+    universe: us_eu
+    requirements:
+      - field: market_cap
+        operator: ">="
+        value: 300000000  # 300M
+      - field: market_cap
+        operator: "<="
+        value: 3000000000000000  # 3,000T
+      - field: volatility_1m
+        operator: ">="
+        value: 5
+      - field: volume_sma_30
+        operator: ">="
+        value: 300000
+      - field: volume
+        operator: ">="
+        value: 100000
+      - field: pct_change_3m
+        operator: ">="
+        value: 50
+    postprocess:
+      sort_by: pct_change_3m
+      sort_order: desc
+
+  # Strongest 6M 100%
+  strongest_6m_100:
+    description: "Strongest 6M 100%: Stocks up >100% in last 6 months (US+EU)"
+    universe: us_eu
+    requirements:
+      - field: market_cap
+        operator: ">="
+        value: 300000000  # 300M
+      - field: market_cap
+        operator: "<="
+        value: 3000000000000000  # 3,000T
+      - field: volatility_1m
+        operator: ">="
+        value: 5
+      - field: volume_sma_30
+        operator: ">="
+        value: 300000
+      - field: volume
+        operator: ">="
+        value: 100000
+      - field: pct_change_6m
+        operator: ">="
+        value: 100
+    postprocess:
+      sort_by: pct_change_6m
+      sort_order: desc
+
+  # New Relative Strength
+  new_rs:
+    description: "New RS: Stocks showing new relative strength (US+EU)"
+    universe: us_eu
+    requirements:
+      - field: pct_change_3m
+        operator: ">="
+        value: 15
+      - field: volume_sma_30
+        operator: ">="
+        value: 300000
+      - field: pct_change_1y
+        operator: ">="
+        value: 0
+      - field: pct_change_1m
+        operator: ">="
+        value: 10
+      - field: pct_change_6m
+        operator: "between"
+        value: [-25, 25]
+    postprocess:
+      sort_by: pct_change_1m
+      sort_order: desc
+
+  # =========================================================================
+  # POST-FILTERS (applied on results from regular screeners above)
+  # =========================================================================
+
+  # Scan Below EMA 5 — price is 0-5% above EMA(5)
+  scan_below_ema5:
+    description: "Scan Below EMA5: EMA(5) below price by 0-5%, SMA10>SMA20, pullback"
+    post_filter: true
+    requirements:
+      - field: ema5_distance_pct
+        operator: "between"
+        value: [0, 5]
+      - field: sma_10
+        operator: ">"
+        reference: sma_20
+      - field: pct_change_5d
+        operator: "<"
+        value: 5
+      - field: volatility_1m
+        operator: ">="
+        value: 3.5
+
+  # Scan Above EMA 5 — price is 0-5% below EMA(5)
+  scan_above_ema5:
+    description: "Scan Above EMA5: EMA(5) above price by 0-5%, SMA10>SMA20, pullback"
+    post_filter: true
+    requirements:
+      - field: ema5_distance_pct
+        operator: "between"
+        value: [-5, 0]
+      - field: sma_10
+        operator: ">"
+        reference: sma_20
+      - field: pct_change_5d
+        operator: "<"
+        value: 5
+      - field: volatility_1m
+        operator: ">="
+        value: 3.5
+
 # Global settings
 settings:
   # Combine results from multiple screeners
@@ -137,13 +286,17 @@ settings:
 # Technical (calculated from OHLCV):
 #   - close, open, high, low, volume
 #   - sma_X (10, 20, 50, 100, 200)
-#   - ema_X (10, 20, 50)
+#   - ema_X (5, 10, 20, 50)
 #   - rsi_14
-#   - volume_sma_X (20, 30, 60)
+#   - volume_sma_X (20, 30, 50, 60)
 #   - pct_change_Xd (1, 5, 20, 60)
 #   - pct_change_1m (≈21 trading days)
+#   - pct_change_3m (≈63 trading days)
+#   - pct_change_6m (≈126 trading days)
+#   - pct_change_1y (≈250 trading days)
 #   - adr_pct (Average Daily Range as %)
 #   - volatility_1m (1-month volatility as %)
+#   - ema5_distance_pct (% distance of price from EMA5: positive=price above)
 #
 # Fundamentals (from yfinance, when available):
 #   - market_cap
@@ -152,3 +305,6 @@ settings:
 #   - earnings_growth (EPS growth quarterly YoY)
 #   - profit_margin
 #   - debt_to_equity
+#
+# Special flags:
+#   - post_filter: true  → screener runs on consolidated results of regular screeners

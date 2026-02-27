@@ -125,6 +125,7 @@ def _compute_single_ticker(args: tuple) -> Optional[dict]:
         sma_200_val = _safe_last(calculate_sma(close, 200), 200)
 
         # EMAs
+        ema_5_val = _safe_last(calculate_ema(close, 5), 5)
         ema_10_val = _safe_last(calculate_ema(close, 10), 10)
         ema_20_val = _safe_last(calculate_ema(close, 20), 20)
         ema_50_val = _safe_last(calculate_ema(close, 50), 50)
@@ -132,6 +133,9 @@ def _compute_single_ticker(args: tuple) -> Optional[dict]:
         # Price vs SMA — only if SMA itself is valid
         price_vs_sma50 = ((latest_close / sma_50_val) - 1) * 100 if pd.notna(sma_50_val) and sma_50_val != 0 else np.nan
         price_vs_sma200 = ((latest_close / sma_200_val) - 1) * 100 if pd.notna(sma_200_val) and sma_200_val != 0 else np.nan
+
+        # EMA(5) distance from price: positive = price above EMA5
+        ema5_distance_pct = ((latest_close / ema_5_val) - 1) * 100 if pd.notna(ema_5_val) and ema_5_val != 0 else np.nan
 
         # 52-week high/low (use all available data if <252 rows)
         high_52w = high.tail(252).max() if n >= 252 else high.max()
@@ -151,6 +155,7 @@ def _compute_single_ticker(args: tuple) -> Optional[dict]:
             'sma_100': sma_100_val,
             'sma_200': sma_200_val,
 
+            'ema_5': ema_5_val,
             'ema_10': ema_10_val,
             'ema_20': ema_20_val,
             'ema_50': ema_50_val,
@@ -167,6 +172,9 @@ def _compute_single_ticker(args: tuple) -> Optional[dict]:
             'pct_change_20d': _safe_last(calculate_pct_change(close, 20), 21),
             'pct_change_1m': _safe_last(calculate_pct_change(close, 21), 22),
             'pct_change_60d': _safe_last(calculate_pct_change(close, 60), 61),
+            'pct_change_3m': _safe_last(calculate_pct_change(close, 63), 64),
+            'pct_change_6m': _safe_last(calculate_pct_change(close, 126), 127),
+            'pct_change_1y': _safe_last(calculate_pct_change(close, 250), 251),
 
             'price_vs_sma50_pct': price_vs_sma50,
             'price_vs_sma200_pct': price_vs_sma200,
@@ -175,6 +183,8 @@ def _compute_single_ticker(args: tuple) -> Optional[dict]:
             'adr_pct': _safe_last(calculate_adr_pct(high, low, close, 20), 21),
 
             'volatility_1m': _safe_last(calculate_volatility(close, 21), 22),
+
+            'ema5_distance_pct': ema5_distance_pct,
 
             'high_52w': high_52w,
             'low_52w': low_52w,
