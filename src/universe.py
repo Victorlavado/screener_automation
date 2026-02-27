@@ -5,6 +5,7 @@ Handles fetching and consolidating symbol lists from various sources.
 
 import os
 import json
+import logging
 import time
 from pathlib import Path
 from typing import List, Set, Dict, Any
@@ -14,9 +15,37 @@ import pandas as pd
 import requests
 import yaml
 
+logger = logging.getLogger(__name__)
 
 # Cache directory for symbol lists
 CACHE_DIR = Path(__file__).parent.parent / ".cache"
+
+# Test/dummy symbols to exclude from exchanges
+_TEST_SYMBOLS = frozenset({
+    "ZTEST", "ZAZZT", "ZBZZT", "ZWZZT",
+    "MTEST", "CTEST", "ZEXIT", "ZXIET",
+})
+
+
+def _is_common_stock(symbol: str) -> bool:
+    """Return True if symbol looks like a common stock (not warrant/unit/right/test).
+
+    Rejects:
+      - Warrants: ending in -W or -WS (e.g. OXY-W, GME-W)
+      - Units: ending in -U (e.g. YCY-U, SAC-U)
+      - Rights: ending in -R (e.g. AEAC-R)
+      - Test symbols: ZTEST, ZAZZT, etc.
+    """
+    upper = symbol.upper()
+    if upper in _TEST_SYMBOLS:
+        return False
+    # Check suffixes after last hyphen
+    if '-' in upper:
+        suffix = upper.rsplit('-', 1)[1]
+        if suffix in ('W', 'WS', 'U', 'R'):
+            return False
+    return True
+
 
 # User agent for web requests
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -128,6 +157,7 @@ def fetch_nasdaq_listed() -> List[str]:
         lines = response.text.strip().split('\n')
         symbols = []
 
+        raw_symbols = []
         for line in lines[1:]:  # Skip header
             if '|' in line:
                 parts = line.split('|')
@@ -136,15 +166,23 @@ def fetch_nasdaq_listed() -> List[str]:
                 if symbol and not symbol.startswith('File') and len(symbol) <= 5:
                     # Filter out symbols with special characters
                     if symbol.isalpha() or (symbol.replace('-', '').isalpha()):
-                        symbols.append(f"NASDAQ:{symbol}")
+                        raw_symbols.append(symbol)
+
+        # Filter out warrants, units, rights, and test symbols
+        filtered = [s for s in raw_symbols if _is_common_stock(s)]
+        excluded = len(raw_symbols) - len(filtered)
+        if excluded:
+            logger.debug("NASDAQ: excluded %d non-common-stock symbols", excluded)
+
+        symbols = [f"NASDAQ:{s}" for s in filtered]
 
         with open(cache_path, 'w') as f:
             json.dump(symbols, f)
 
-        print(f"Fetched {len(symbols)} NASDAQ listed symbols")
+        logger.info("Fetched %d NASDAQ listed symbols", len(symbols))
         return symbols
     except Exception as e:
-        print(f"Error fetching NASDAQ listed: {e}")
+        logger.error("Error fetching NASDAQ listed: %s", e)
         return []
 
 
@@ -163,7 +201,7 @@ def fetch_nyse_listed() -> List[str]:
         response.raise_for_status()
 
         lines = response.text.strip().split('\n')
-        symbols = []
+        raw_entries = []
 
         for line in lines[1:]:  # Skip header
             if '|' in line:
@@ -178,15 +216,25 @@ def fetch_nyse_listed() -> List[str]:
                 if symbol and not symbol.startswith('File') and len(symbol) <= 5:
                     if symbol.isalpha() or (symbol.replace('-', '').replace('.', '').isalpha()):
                         symbol = symbol.replace('.', '-')  # For yfinance compatibility
-                        symbols.append(f"{exchange}:{symbol}")
+                        raw_entries.append((exchange, symbol))
+
+        # Filter out warrants, units, rights, and test symbols
+        before_count = len(raw_entries)
+        symbols = [
+            f"{exch}:{sym}" for exch, sym in raw_entries
+            if _is_common_stock(sym)
+        ]
+        excluded = before_count - len(symbols)
+        if excluded:
+            logger.debug("NYSE/AMEX: excluded %d non-common-stock symbols", excluded)
 
         with open(cache_path, 'w') as f:
             json.dump(symbols, f)
 
-        print(f"Fetched {len(symbols)} NYSE/AMEX listed symbols")
+        logger.info("Fetched %d NYSE/AMEX listed symbols", len(symbols))
         return symbols
     except Exception as e:
-        print(f"Error fetching NYSE listed: {e}")
+        logger.error("Error fetching NYSE listed: %s", e)
         return []
 
 
