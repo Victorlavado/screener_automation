@@ -113,7 +113,18 @@ def _save_failed_tickers_cache(
     period: str,
     interval: str,
 ) -> None:
-    """Persist failed tickers to the negative cache (merge, don't overwrite)."""
+    """Persist failed tickers to the negative cache (merge, don't overwrite).
+
+    Benchmark tickers (^GSPC) are exempted: yfinance occasionally returns
+    empty for them during transient outages, and a 7-day cooldown on the
+    benchmark would degrade RS computation across multiple weekly runs.
+    """
+    # Strip benchmarks before persisting. Promote to a BENCHMARK_TICKERS set
+    # if a second benchmark is added.
+    failed = {t: ts for t, ts in failed.items() if t != "^GSPC"}
+    if not failed:
+        return
+
     cache_dir = _get_ohlcv_cache_dir(period, interval)
     cache_file = cache_dir / "failed_tickers.json"
 

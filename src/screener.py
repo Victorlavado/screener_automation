@@ -3,7 +3,7 @@ Screener engine module.
 Applies filter definitions to indicator data.
 """
 
-from typing import Dict, List, Any, Set, Optional, Tuple
+from typing import Dict, List, Any, NamedTuple, Set, Optional, Tuple
 import pandas as pd
 import yaml
 
@@ -36,6 +36,12 @@ def evaluate_condition(
 
     Returns:
         Boolean Series indicating which rows pass the condition
+
+    Raises:
+        KeyError: if field/reference is missing from df. Callers should run
+            _validate_required_columns at engine startup to surface this
+            class of error early instead of producing silent zero-symbol
+            results.
     """
     field = condition.get('field')
     operator = condition.get('operator')
@@ -43,16 +49,20 @@ def evaluate_condition(
     reference = condition.get('reference')
 
     if field not in df.columns:
-        print(f"Warning: field '{field}' not found in data")
-        return pd.Series([False] * len(df), index=df.index)
+        raise KeyError(
+            f"Filter field '{field}' not found in indicators DataFrame. "
+            "Run _validate_required_columns at engine startup."
+        )
 
     field_values = df[field]
 
     # Determine comparison value
     if reference is not None:
         if reference not in df.columns:
-            print(f"Warning: reference field '{reference}' not found in data")
-            return pd.Series([False] * len(df), index=df.index)
+            raise KeyError(
+                f"Filter reference '{reference}' not found in indicators DataFrame. "
+                "Run _validate_required_columns at engine startup."
+            )
         compare_to = df[reference]
     else:
         compare_to = value
@@ -187,20 +197,72 @@ def get_prescreen_candidates(
     return candidates
 
 
-def split_screener_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Split screener config into regular screeners and post-filters.
+class ScreenerGroups(NamedTuple):
+    """Three screener-config dicts split by routing flag.
+
+    Each field is a full screeners-config dict (preserves global settings
+    like consolidation method and exclude_symbols), differing only in which
+    screeners survive the filter.
+    """
+    with_postfilter: Dict[str, Any]   # regular screeners that flow through EMA5 post-filter
+    bypass: Dict[str, Any]            # regular screeners with apply_post_filter: false
+    post_filter_only: Dict[str, Any]  # screeners with post_filter: true (the EMA5 scans)
+
+
+def split_screener_config(config: Dict[str, Any]) -> ScreenerGroups:
+    """Split screener config into the three pipeline groups.
+
+    A screener belongs to:
+      - post_filter_only:  post_filter == True
+      - bypass:            post_filter is falsy AND apply_post_filter is falsy
+      - with_postfilter:   everything else (the default)
+
+    `post_filter: true` takes precedence over `apply_post_filter: false`.
 
     Returns:
-        Tuple of (regular_config, post_filter_config) — each is a full config
-        dict with a 'screeners' key containing only the relevant screeners.
+        ScreenerGroups NamedTuple. Each field is a full config dict with a
+        'screeners' key containing only the relevant screeners.
     """
     screeners = config.get('screeners', {})
-    regular = {k: v for k, v in screeners.items() if not v.get('post_filter', False)}
-    post = {k: v for k, v in screeners.items() if v.get('post_filter', False)}
+    with_pf, bypass, post = {}, {}, {}
+    for name, sdef in screeners.items():
+        if sdef.get('post_filter', False):
+            post[name] = sdef
+        elif not sdef.get('apply_post_filter', True):
+            bypass[name] = sdef
+        else:
+            with_pf[name] = sdef
+    return ScreenerGroups(
+        with_postfilter={**config, 'screeners': with_pf},
+        bypass={**config, 'screeners': bypass},
+        post_filter_only={**config, 'screeners': post},
+    )
 
-    regular_config = {**config, 'screeners': regular}
-    post_config = {**config, 'screeners': post}
-    return regular_config, post_config
+
+def _validate_required_columns(df: pd.DataFrame, config: Dict[str, Any]) -> None:
+    """Fail-fast schema check.
+
+    Every YAML-referenced field/reference must exist as a column in df.
+    Raises ValueError listing the missing fields. This catches the silent
+    zero-symbol-result class of bug that occurs when YAML drifts ahead of
+    the indicators schema (e.g. resume from a stale checkpoint).
+    """
+    referenced: Set[str] = set()
+    for sdef in config.get('screeners', {}).values():
+        for req in sdef.get('requirements', []):
+            if 'field' in req:
+                referenced.add(req['field'])
+            if 'reference' in req:
+                referenced.add(req['reference'])
+        pp = sdef.get('postprocess') or {}
+        if pp.get('sort_by'):
+            referenced.add(pp['sort_by'])
+    missing = referenced - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"Indicator DataFrame is missing required columns: {sorted(missing)}. "
+            "If resuming from a stale checkpoint, re-run with --no-cache."
+        )
 
 
 def run_all_screeners(
@@ -223,6 +285,8 @@ def run_all_screeners(
     """
     if config is None:
         config = load_screeners_config()
+
+    _validate_required_columns(indicators_df, config)
 
     universe_tickers = universe_tickers or {}
     screeners = config.get('screeners', {})

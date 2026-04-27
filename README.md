@@ -56,15 +56,23 @@ Si el pipeline se interrumpe, se puede reanudar con `--resume` sin perder progre
 | `strongest_3m_50` | Momentum fuerte 3M | Perf 3M >50%, Vol1M >5%, Market cap 300M-3000T |
 | `strongest_6m_100` | Momentum fuerte 6M | Perf 6M >100%, Vol1M >5%, Market cap 300M-3000T |
 | `new_rs` | Nueva fuerza relativa | Perf 6M entre -25%/25%, Perf 3M >15%, Perf 1M >10%, Perf 1Y >0% |
+| `rs_information_ratio` | Information Ratio vs SP500 | IR anualizado a 63d ≥ 1.0 (bypass EMA5) |
+| `rs_oneil_modified` | RS O'Neil modificado | rs_rating ≥ 80, Vol1M ≤ 80% (bypass EMA5; pesos 40/30/20/10 sobre 1M/3M/6M/1Y) |
 
 #### Post-filtros (aplicados sobre resultados de screeners regulares)
 
 | Post-filtro | Descripcion | Filtros |
 |-------------|-------------|---------|
-| `scan_below_ema5` | Precio cerca por encima de EMA5 | EMA5 debajo del precio 0-5%, SMA10>SMA20, Perf 1W <5%, Vol1M >3.5% |
-| `scan_above_ema5` | Precio cerca por debajo de EMA5 | EMA5 encima del precio 0-5%, SMA10>SMA20, Perf 1W <5%, Vol1M >3.5% |
+| `scan_below_ema5` | Precio cerca por encima de EMA5 | EMA5 debajo del precio 0-7.5%, SMA10>SMA20, Perf 1W <7%, Vol1M >3.5% |
+| `scan_above_ema5` | Precio cerca por debajo de EMA5 | EMA5 encima del precio 0-7.5%, SMA10>SMA20, Perf 1W <7%, Vol1M >3.5% |
 
 Los post-filtros no se aplican sobre todo el universo. Se ejecutan sobre las acciones que ya pasaron los screeners regulares, filtrando por proximidad a la EMA(5) y condiciones de pullback.
+
+#### Bypass del post-filtro EMA5 (`apply_post_filter: false`)
+
+Algunos screeners — los de fuerza relativa (`rs_*`) — saltan el post-filtro EMA5 mediante el flag `apply_post_filter: false`. Esto permite que líderes consistentes (alta IR vs SP500, percentil RS alto) lleguen al watchlist sin requerir un pullback. Por defecto el flag es `true`, por lo que el resto de screeners regulares siguen pasando por el post-filtro como hasta ahora.
+
+El flujo final del pipeline es: `(Grupo A regular → post-filtro EMA5)  ∪  (Grupo B bypass)`.
 
 ### Salidas
 
@@ -106,7 +114,8 @@ Define los filtros a aplicar. Cada screener tiene:
 - `universe`: Que universo evaluar (cada screener puede usar uno diferente)
 - `requirements`: Lista de condiciones (tecnicas y/o fundamentales)
 - `postprocess`: Ordenamiento y limites
-- `post_filter`: `true` para screeners que se aplican sobre resultados de otros screeners
+- `post_filter`: `true` para screeners que se aplican sobre resultados de otros screeners (post-filtros EMA5)
+- `apply_post_filter`: `false` para screeners regulares que deben saltar el post-filtro EMA5 (por defecto `true`)
 
 Los screeners que usan campos fundamentales se benefician de un **pre-screen tecnico**: primero se aplican los filtros tecnicos para reducir la lista, y solo se descargan fundamentales para los candidatos resultantes.
 
@@ -135,6 +144,11 @@ Los screeners que usan campos fundamentales se benefician de un **pre-screen tec
 - `volatility_1m`
 - `ema5_distance_pct` (distancia % del precio respecto a EMA5: positivo = precio encima)
 - `high_52w`, `low_52w`, `pct_from_52w_high`, `pct_from_52w_low`
+
+**Fuerza relativa (calculados en una etapa dedicada tras los indicadores):**
+- `rs_ir` (Information Ratio anualizado a 63d vs ^GSPC)
+- `rs_weighted_return` (`0.4*R1M + 0.3*R3M + 0.2*R6M + 0.1*R12M`, en %)
+- `rs_rating` (rank percentil de `rs_weighted_return` en el universo, 0-100)
 
 **Fundamentales (descargados bajo demanda):**
 - `market_cap`, `pe_ratio`, `forward_pe`, `peg_ratio`, `price_to_book`
