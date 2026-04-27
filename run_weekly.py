@@ -19,6 +19,7 @@ Options:
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -34,7 +35,7 @@ from src.universe import (
     symbols_to_tickers,
 )
 from src.data import download_ohlcv_batch, download_fundamentals
-from src.indicators import compute_all_indicators
+from src.indicators import compute_all_indicators, compute_rs_indicators
 from src.screener import (
     load_screeners_config,
     run_all_screeners,
@@ -219,6 +220,24 @@ def run_pipeline(
         logger.error("No OHLCV data. Exiting.")
         return
 
+    # Download SP500 (^GSPC) for Relative Strength calculations.
+    # Failure is tolerated: RS screeners produce empty results, rest of
+    # pipeline continues. Negative cache exempts ^GSPC (see src/data.py).
+    logger.info("Downloading SP500 (^GSPC) for RS calculations...")
+    sp500_data = download_ohlcv_batch(
+        ["^GSPC"],
+        period="1y",
+        show_progress=False,
+        cache_max_age_hours=cache_age,
+    )
+    sp500_df = sp500_data.get("^GSPC")
+    if sp500_df is not None and not sp500_df.empty:
+        sp500_close = sp500_df["Close"]
+        logger.info(f"SP500 data available ({len(sp500_close)} days)")
+    else:
+        sp500_close = None
+        logger.warning("SP500 download failed — RS screeners will produce empty results")
+
     _mark_stage(ckpt_dir, "ohlcv")
 
     # ------------------------------------------------------------------
@@ -299,6 +318,29 @@ def run_pipeline(
         _mark_stage(ckpt_dir, "indicators")
 
     # ------------------------------------------------------------------
+    # Stage 4.5: RS enrichment (rs_ir, rs_weighted_return, rs_rating)
+    #
+    # Has its own checkpoint marker so resume after a schema change re-runs
+    # RS enrichment without re-doing earlier stages. Old checkpoints (no
+    # `indicators_rs` marker) automatically trigger re-enrichment on resume.
+    # ------------------------------------------------------------------
+    indicators_rs_path = ckpt_dir / "indicators_rs.parquet"
+
+    if resume and _stage_done(ckpt_dir, "indicators_rs") and indicators_rs_path.exists():
+        logger.info("[Stage 4.5/5] Loading RS-enriched indicators from checkpoint...")
+        indicators_df = pd.read_parquet(indicators_rs_path)
+    else:
+        logger.info("[Stage 4.5/5] Computing RS indicators (IR + rs_rating)...")
+        indicators_df = compute_rs_indicators(indicators_df, sp500_close, ohlcv_data)
+        if not indicators_df.empty:
+            # Atomic write — same pattern as commit 503546c. Prevents Ctrl-C
+            # mid-write from corrupting the parquet.
+            tmp = indicators_rs_path.with_suffix(".parquet.tmp")
+            indicators_df.to_parquet(tmp)
+            os.replace(tmp, indicators_rs_path)
+        _mark_stage(ckpt_dir, "indicators_rs")
+
+    # ------------------------------------------------------------------
     # Stage 5: Screen + export
     # ------------------------------------------------------------------
     logger.info("[Stage 5/5] Running screeners...")
@@ -311,69 +353,80 @@ def run_pipeline(
         }
         logger.info(f"Running selected screeners: {list(screeners_config['screeners'].keys())}")
 
-    # Split into regular screeners and post-filters
-    regular_config, post_filter_config = split_screener_config(screeners_config)
-    has_post_filters = bool(post_filter_config.get('screeners'))
+    # Split into three groups:
+    #   A = regular with post-filter      (default: feeds into EMA5 post-filter)
+    #   B = bypass screeners              (apply_post_filter: false; e.g. RS)
+    #   C = post-filter screeners         (post_filter: true; the EMA5 scans)
+    groups = split_screener_config(screeners_config)
+    has_post_filters = bool(groups.post_filter_only.get('screeners'))
 
     settings = screeners_config.get('settings', {})
     consolidation_method = settings.get('consolidation', 'union')
     exclude_symbols = settings.get('exclude_symbols', [])
 
-    # --- Run regular screeners ---
-    if regular_config.get('screeners'):
-        logger.info(f"Running {len(regular_config['screeners'])} regular screener(s)...")
-        screener_results = run_all_screeners(
-            indicators_df, regular_config, universe_tickers=screener_tickers
+    # --- Group A: regular screeners with post-filter ---
+    if groups.with_postfilter.get('screeners'):
+        logger.info(f"Running {len(groups.with_postfilter['screeners'])} regular screener(s) (with post-filter)...")
+        results_a = run_all_screeners(
+            indicators_df, groups.with_postfilter, universe_tickers=screener_tickers
         )
-
-        logger.info(f"Consolidating regular results (method: {consolidation_method})...")
-        regular_symbols, regular_trace = consolidate_results(
-            screener_results,
+        logger.info(f"Consolidating Group A results (method: {consolidation_method})...")
+        symbols_a, trace_a = consolidate_results(
+            results_a,
             method=consolidation_method,
             exclude_symbols=exclude_symbols,
         )
-        logger.info(f"Regular screeners: {len(regular_symbols)} symbols")
+        logger.info(f"Group A (regular): {len(symbols_a)} symbols")
     else:
-        screener_results = {}
-        regular_symbols, regular_trace = [], {}
+        results_a, symbols_a, trace_a = {}, [], {}
 
-    # --- Run post-filters on the regular results ---
-    if has_post_filters and regular_symbols:
-        logger.info(f"Running {len(post_filter_config['screeners'])} post-filter(s) "
-                     f"on {len(regular_symbols)} pre-filtered symbols...")
+    # --- Group C: post-filters applied to Group A ---
+    if has_post_filters and symbols_a:
+        logger.info(f"Running {len(groups.post_filter_only['screeners'])} post-filter(s) "
+                    f"on {len(symbols_a)} pre-filtered symbols...")
 
-        # Post-filters operate on the tickers that passed regular screeners
         post_filter_tickers = {
-            name: set(regular_symbols)
-            for name in post_filter_config['screeners']
+            name: set(symbols_a)
+            for name in groups.post_filter_only['screeners']
         }
-
-        post_results = run_all_screeners(
-            indicators_df, post_filter_config, universe_tickers=post_filter_tickers
+        results_c = run_all_screeners(
+            indicators_df, groups.post_filter_only, universe_tickers=post_filter_tickers
         )
-
-        # Final symbols = union of post-filter results
-        final_symbols, post_trace = consolidate_results(
-            post_results,
+        symbols_a_final, trace_c = consolidate_results(
+            results_c,
             method='union',
             exclude_symbols=exclude_symbols,
         )
-
-        # Merge traceability: include both regular and post-filter screener info
-        traceability = {}
-        for sym in final_symbols:
-            screeners_passed = regular_trace.get(sym, []) + post_trace.get(sym, [])
-            traceability[sym] = screeners_passed
-
-        # Combine all results for reporting
-        screener_results.update(post_results)
-        logger.info(f"Post-filters: {len(final_symbols)} symbols in final list")
-    elif has_post_filters and not regular_symbols:
-        logger.warning("No symbols from regular screeners — skipping post-filters")
-        final_symbols, traceability = [], {}
+        logger.info(f"Group A after post-filter: {len(symbols_a_final)} symbols")
+    elif has_post_filters and not symbols_a:
+        logger.warning("No symbols from Group A — skipping post-filters")
+        results_c, symbols_a_final, trace_c = {}, [], {}
     else:
-        # No post-filters defined — regular results are final
-        final_symbols, traceability = regular_symbols, regular_trace
+        # No post-filters defined — Group A passes through unchanged
+        results_c, symbols_a_final, trace_c = {}, symbols_a, {}
+
+    # --- Group B: bypass screeners (skip post-filter, feed straight to final) ---
+    if groups.bypass.get('screeners'):
+        logger.info(f"Running {len(groups.bypass['screeners'])} bypass screener(s) (no post-filter)...")
+        results_b = run_all_screeners(
+            indicators_df, groups.bypass, universe_tickers=screener_tickers
+        )
+        symbols_b, trace_b = consolidate_results(
+            results_b,
+            method=consolidation_method,
+            exclude_symbols=exclude_symbols,
+        )
+        logger.info(f"Group B (bypass): {len(symbols_b)} symbols")
+    else:
+        results_b, symbols_b, trace_b = {}, [], {}
+
+    # --- Final union: Group A (post-filtered) ∪ Group B (bypass) ---
+    final_symbols = sorted(set(symbols_a_final) | set(symbols_b))
+    traceability = {
+        sym: (trace_a.get(sym, []) + trace_c.get(sym, []) + trace_b.get(sym, []))
+        for sym in final_symbols
+    }
+    screener_results = {**results_a, **results_c, **results_b}
 
     logger.info(f"Final consolidated list: {len(final_symbols)} symbols")
 

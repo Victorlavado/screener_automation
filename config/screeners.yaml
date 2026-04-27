@@ -230,41 +230,76 @@ screeners:
       sort_order: desc
 
   # =========================================================================
+  # RELATIVE STRENGTH SCREENERS (bypass EMA5 post-filter)
+  # =========================================================================
+
+  # RS Information Ratio — annualized excess-return-over-volatility vs SP500
+  rs_information_ratio:
+    description: "RS Information Ratio: Daily outperformance vs SP500, vol-normalized (us_eu, bypasses EMA5)"
+    universe: us_eu
+    apply_post_filter: false
+    requirements:
+      - field: rs_ir
+        operator: ">="
+        value: 1.0
+    postprocess:
+      sort_by: rs_ir
+      sort_order: desc
+
+  # RS O'Neil-modified — front-loaded weighted return, percentile-ranked
+  # Weights: 0.4*R1M + 0.3*R3M + 0.2*R6M + 0.1*R12M (deviates from canonical
+  # IBD 40/20/20/20 over 3M/6M/9M/12M; the _modified suffix flags this).
+  rs_oneil_modified:
+    description: "RS O'Neil-modified: front-loaded weighted return ranked vs us_eu universe (bypasses EMA5)"
+    universe: us_eu
+    apply_post_filter: false
+    requirements:
+      - field: rs_rating
+        operator: ">="
+        value: 80
+      - field: volatility_1m
+        operator: "<="
+        value: 80
+    postprocess:
+      sort_by: rs_rating
+      sort_order: desc
+
+  # =========================================================================
   # POST-FILTERS (applied on results from regular screeners above)
   # =========================================================================
 
-  # Scan Below EMA 5 — price is 0-5% above EMA(5)
+  # Scan Below EMA 5 — price is 0-7.5% above EMA(5)
   scan_below_ema5:
-    description: "Scan Below EMA5: EMA(5) below price by 0-5%, SMA10>SMA20, pullback"
+    description: "Scan Below EMA5: EMA(5) below price by 0-7.5%, SMA10>SMA20, pullback"
     post_filter: true
     requirements:
       - field: ema5_distance_pct
         operator: "between"
-        value: [0, 5]
+        value: [0, 7.5]
       - field: sma_10
         operator: ">"
         reference: sma_20
       - field: pct_change_5d
         operator: "<"
-        value: 5
+        value: 7
       - field: volatility_1m
         operator: ">="
         value: 3.5
 
-  # Scan Above EMA 5 — price is 0-5% below EMA(5)
+  # Scan Above EMA 5 — price is 0-7.5% below EMA(5)
   scan_above_ema5:
-    description: "Scan Above EMA5: EMA(5) above price by 0-5%, SMA10>SMA20, pullback"
+    description: "Scan Above EMA5: EMA(5) above price by 0-7.5%, SMA10>SMA20, pullback"
     post_filter: true
     requirements:
       - field: ema5_distance_pct
         operator: "between"
-        value: [-5, 0]
+        value: [-7.5, 0]
       - field: sma_10
         operator: ">"
         reference: sma_20
       - field: pct_change_5d
         operator: "<"
-        value: 5
+        value: 7
       - field: volatility_1m
         operator: ">="
         value: 3.5
@@ -298,6 +333,11 @@ settings:
 #   - volatility_1m (1-month volatility as %)
 #   - ema5_distance_pct (% distance of price from EMA5: positive=price above)
 #
+# Relative Strength (computed in a dedicated post-indicators stage):
+#   - rs_ir (annualized 63d Information Ratio vs ^GSPC)
+#   - rs_weighted_return (0.4*R1M + 0.3*R3M + 0.2*R6M + 0.1*R12M, %)
+#   - rs_rating (percentile rank of rs_weighted_return across the universe, 0-100)
+#
 # Fundamentals (from yfinance, when available):
 #   - market_cap
 #   - pe_ratio
@@ -307,4 +347,5 @@ settings:
 #   - debt_to_equity
 #
 # Special flags:
-#   - post_filter: true  → screener runs on consolidated results of regular screeners
+#   - post_filter: true        → screener runs on consolidated results of regular screeners
+#   - apply_post_filter: false → screener bypasses the EMA5 post-filter and feeds directly into the final union (default: true)

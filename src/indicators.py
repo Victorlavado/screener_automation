@@ -263,6 +263,87 @@ def get_indicator_value(df: pd.DataFrame, ticker: str, field: str) -> Optional[f
     return df.loc[ticker, field]
 
 
+# ---------------------------------------------------------------------------
+# Relative Strength enrichment
+#
+# Runs as a separate pipeline stage AFTER compute_all_indicators because:
+#   - IR needs SP500 returns aligned by date (a shared series).
+#   - rs_rating is a percentile rank across the full universe (only computable
+#     once the per-ticker pass is complete).
+# ---------------------------------------------------------------------------
+
+RS_IR_WINDOW = 63           # ~3 months of trading days
+RS_IR_MIN_OBS = 50          # require at least 50 valid aligned days inside the window
+RS_IR_STD_FLOOR = 0.005     # 0.5% daily — numerical guard against index-clones (not a statistical estimator)
+
+
+def compute_rs_indicators(
+    indicators_df: pd.DataFrame,
+    sp500_close: Optional[pd.Series],
+    ohlcv: Dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """Enrich indicators_df with rs_ir, rs_weighted_return, rs_rating.
+
+    Returns a new DataFrame with three added columns. If sp500_close is None
+    or empty, all three columns are set to NaN and a warning is logged.
+    """
+    df = indicators_df.copy()
+    df['rs_ir'] = np.nan
+    df['rs_weighted_return'] = np.nan
+    df['rs_rating'] = np.nan
+
+    if sp500_close is None or sp500_close.empty:
+        logger.warning("SP500 data unavailable — skipping RS indicators")
+        return df
+
+    # Dedupe SP500 — yfinance occasionally emits duplicated timestamps.
+    sp = sp500_close[~sp500_close.index.duplicated(keep='last')].dropna()
+    sp500_returns = sp.pct_change().dropna()
+
+    # ── IR via wide-DataFrame broadcast ──
+    # Build wide DataFrame of returns per ticker, align with SP500 on inner
+    # join, THEN take the trailing 63d window (otherwise EU stocks
+    # systematically lose days near US holidays inside the window).
+    series_by_ticker = {}
+    for t in df.index:
+        if t not in ohlcv:
+            continue
+        close = ohlcv[t]['Close'].dropna()
+        if not close.index.is_unique:
+            close = close[~close.index.duplicated(keep='last')]
+        series_by_ticker[t] = close.pct_change().dropna()
+
+    if not series_by_ticker:
+        logger.warning("No overlapping OHLCV tickers for RS — skipping IR computation")
+    else:
+        returns_wide = pd.DataFrame(series_by_ticker)
+        aligned_idx = returns_wide.index.intersection(sp500_returns.index)
+        returns_wide = returns_wide.loc[aligned_idx].tail(RS_IR_WINDOW)
+        sp_aligned = sp500_returns.loc[returns_wide.index]
+
+        excess = returns_wide.sub(sp_aligned, axis=0)
+        counts = excess.count(axis=0)
+        mean = excess.mean(axis=0)
+        std = excess.std(axis=0, ddof=1).clip(lower=RS_IR_STD_FLOOR)
+        ir = ((mean / std) * np.sqrt(252)).where(counts >= RS_IR_MIN_OBS)
+
+        df.loc[ir.index, 'rs_ir'] = ir
+
+    # ── IBD-style weighted return + percentile rank ──
+    weighted = (
+        0.4 * df['pct_change_1m']
+        + 0.3 * df['pct_change_3m']
+        + 0.2 * df['pct_change_6m']
+        + 0.1 * df['pct_change_1y']
+    )
+    df['rs_weighted_return'] = weighted
+    df['rs_rating'] = (
+        weighted.rank(pct=True, na_option='keep', method='average') * 100
+    )
+
+    return df
+
+
 if __name__ == "__main__":
     # Test indicators
     import yfinance as yf
