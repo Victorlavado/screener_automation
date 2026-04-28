@@ -239,7 +239,18 @@ def download_ohlcv_batch(
                 if len(batch) == 1:
                     ticker = batch[0]
                     if not data.empty:
-                        batch_results[ticker] = data
+                        # yfinance with group_by='ticker' returns a MultiIndex
+                        # even for single-ticker batches. Flatten so cached
+                        # parquet matches the multi-ticker shape (`Close`,
+                        # `Open`, …) — otherwise downstream `df["Close"]`
+                        # access fails for benchmarks like ^GSPC.
+                        if isinstance(data.columns, pd.MultiIndex):
+                            if ticker in data.columns.get_level_values(0):
+                                data = data[ticker].dropna(how='all')
+                            else:
+                                data = data.droplevel(0, axis=1).dropna(how='all')
+                        if not data.empty:
+                            batch_results[ticker] = data
                 else:
                     for ticker in batch:
                         if ticker in data.columns.get_level_values(0):
