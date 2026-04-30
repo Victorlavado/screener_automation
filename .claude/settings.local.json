@@ -26,7 +26,8 @@
       "mcp__plugin_compound-engineering_context7__query-docs",
       "Bash(git checkout *)",
       "Bash(uv run *)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(awk *)"
     ]
   }
 }

@@ -12,6 +12,9 @@ import pandas as pd
 
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 
+# TradingView refuses to import watchlists larger than this many symbols.
+TV_WATCHLIST_LIMIT = 1000
+
 # Yahoo Finance exchange suffixes that must be stripped for TradingView.
 # TradingView identifies the exchange via the prefix (e.g. EURONEXT:DG),
 # so the Yahoo suffix (e.g. .PA) is redundant and causes import failures.
@@ -93,6 +96,20 @@ def get_date_suffix() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def _write_tv_watchlist_file(
+    filepath: Path,
+    symbols: List[str],
+    symbol_to_exchange: Dict[str, str],
+) -> None:
+    """Write a TradingView-formatted watchlist file (comma-separated)."""
+    tv_symbols = [
+        _to_tradingview_symbol(s, symbol_to_exchange.get(s, 'NYSE'))
+        for s in symbols
+    ]
+    with open(filepath, 'w') as f:
+        f.write(','.join(tv_symbols))
+
+
 def export_tradingview_watchlist(
     symbols: List[str],
     symbol_to_exchange: Dict[str, str],
@@ -117,21 +134,61 @@ def export_tradingview_watchlist(
         filename = f"candidates_{get_date_suffix()}.txt"
 
     filepath = OUTPUT_DIR / filename
-
-    # Build TradingView format strings
-    tv_symbols = []
-    for symbol in symbols:
-        exchange = symbol_to_exchange.get(symbol, 'NYSE')
-        tv_symbols.append(_to_tradingview_symbol(symbol, exchange))
-
-    # Write comma-separated
-    content = ','.join(tv_symbols)
-
-    with open(filepath, 'w') as f:
-        f.write(content)
+    _write_tv_watchlist_file(filepath, symbols, symbol_to_exchange)
 
     print(f"Exported {len(symbols)} symbols to {filepath}")
     return str(filepath)
+
+
+def export_tradingview_watchlists_per_screener(
+    screener_results: Dict[str, Dict],
+    symbol_to_exchange: Dict[str, str],
+    date_suffix: str = None,
+) -> List[str]:
+    """
+    Export one TradingView watchlist per screener.
+
+    Used when the consolidated list exceeds TV_WATCHLIST_LIMIT and a single
+    file can no longer be imported into TradingView. Screeners whose hit
+    list itself exceeds the limit are chunked into _part1, _part2, ...
+
+    Args:
+        screener_results: { screener_name: { 'symbols': [...], ... }, ... }
+        symbol_to_exchange: Mapping of ticker -> exchange
+        date_suffix: Date string for filenames (default: today)
+
+    Returns:
+        List of paths to the files created.
+    """
+    ensure_output_dir()
+
+    if date_suffix is None:
+        date_suffix = get_date_suffix()
+
+    paths: List[str] = []
+
+    for screener_name, result in screener_results.items():
+        symbols = result.get('symbols', []) or []
+        if not symbols:
+            continue
+
+        if len(symbols) <= TV_WATCHLIST_LIMIT:
+            filepath = OUTPUT_DIR / f"candidates_{date_suffix}_{screener_name}.txt"
+            _write_tv_watchlist_file(filepath, symbols, symbol_to_exchange)
+            print(f"Exported {len(symbols)} symbols ({screener_name}) to {filepath}")
+            paths.append(str(filepath))
+            continue
+
+        for part_idx, start in enumerate(
+            range(0, len(symbols), TV_WATCHLIST_LIMIT), start=1
+        ):
+            chunk = symbols[start:start + TV_WATCHLIST_LIMIT]
+            filepath = OUTPUT_DIR / f"candidates_{date_suffix}_{screener_name}_part{part_idx}.txt"
+            _write_tv_watchlist_file(filepath, chunk, symbol_to_exchange)
+            print(f"Exported {len(chunk)} symbols ({screener_name} part {part_idx}) to {filepath}")
+            paths.append(str(filepath))
+
+    return paths
 
 
 def export_report_csv(
@@ -256,6 +313,13 @@ def export_all(
             f"summary_{date_suffix}.txt"
         )
     }
+
+    if len(final_symbols) > TV_WATCHLIST_LIMIT:
+        paths['watchlists_per_screener'] = export_tradingview_watchlists_per_screener(
+            screener_results,
+            symbol_to_exchange,
+            date_suffix=date_suffix,
+        )
 
     return paths
 
