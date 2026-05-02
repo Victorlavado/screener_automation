@@ -205,30 +205,6 @@ screeners:
       sort_by: pct_change_6m
       sort_order: desc
 
-  # New Relative Strength
-  new_rs:
-    description: "New RS: Stocks showing new relative strength (US+EU)"
-    universe: us_eu
-    requirements:
-      - field: pct_change_3m
-        operator: ">="
-        value: 15
-      - field: volume_sma_30
-        operator: ">="
-        value: 300000
-      - field: pct_change_1y
-        operator: ">="
-        value: 0
-      - field: pct_change_1m
-        operator: ">="
-        value: 10
-      - field: pct_change_6m
-        operator: "between"
-        value: [-25, 25]
-    postprocess:
-      sort_by: pct_change_1m
-      sort_order: desc
-
   # =========================================================================
   # RELATIVE STRENGTH SCREENERS (bypass EMA5 post-filter)
   # =========================================================================

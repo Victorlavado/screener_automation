@@ -55,7 +55,6 @@ Si el pipeline se interrumpe, se puede reanudar con `--resume` sin perder progre
 | `strongest_1m_30` | Momentum fuerte 1M | Perf 1M >30%, Vol1M >5%, Market cap 300M-3000T |
 | `strongest_3m_50` | Momentum fuerte 3M | Perf 3M >50%, Vol1M >5%, Market cap 300M-3000T |
 | `strongest_6m_100` | Momentum fuerte 6M | Perf 6M >100%, Vol1M >5%, Market cap 300M-3000T |
-| `new_rs` | Nueva fuerza relativa | Perf 6M entre -25%/25%, Perf 3M >15%, Perf 1M >10%, Perf 1Y >0% |
 | `rs_information_ratio` | Information Ratio vs SP500 | IR anualizado a 63d ≥ 1.0 (bypass EMA5) |
 | `rs_oneil_modified` | RS O'Neil modificado | rs_rating ≥ 80, Vol1M ≤ 80% (bypass EMA5; pesos 40/30/20/10 sobre 1M/3M/6M/1Y) |
 
