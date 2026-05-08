@@ -4,6 +4,7 @@ Generates output files for TradingView import and auditing.
 """
 
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -45,7 +46,14 @@ _TV_EXCHANGE_MAP = {
     'EBR': 'EURONEXT',   # Euronext Brussels
     'STO': 'OMXSTO',     # OMX Stockholm
     'CPH': 'OMXCOP',     # OMX Copenhagen
+    'ARCA': 'AMEX',      # NYSE Arca: TradingView lists Arca-traded ETFs under AMEX
+    'BATS': 'AMEX',      # Cboe BZX (ex-BATS): legacy symbols resolve under AMEX in TradingView
 }
+
+# US exchanges where dual-class shares use a dot (BRK.B). Outside of these
+# (e.g. Copenhagen NOVO-B), the hyphen is the canonical TradingView form.
+_US_EXCHANGES = frozenset({'NYSE', 'NASDAQ', 'AMEX', 'ARCA', 'BATS'})
+_DUAL_CLASS_RE = re.compile(r'^([A-Z]+)-([A-Z])$')
 
 
 def _strip_yahoo_suffix(ticker: str) -> str:
@@ -71,18 +79,36 @@ def _map_tv_exchange(exchange: str) -> str:
     return _TV_EXCHANGE_MAP.get(exchange, exchange)
 
 
+def _restore_us_dual_class(ticker: str, tv_exchange: str) -> str:
+    """Restore dot notation for US dual-class shares (BRK-B → BRK.B).
+
+    Yahoo Finance uses hyphens (BRK-B) for dual-class shares; TradingView
+    uses dots (BRK.B). Only applies to US exchanges — European tickers like
+    OMXCOP:NOVO-B keep the hyphen.
+    """
+    if tv_exchange in _US_EXCHANGES:
+        m = _DUAL_CLASS_RE.match(ticker)
+        if m:
+            return f"{m.group(1)}.{m.group(2)}"
+    return ticker
+
+
 def _to_tradingview_symbol(ticker: str, exchange: str) -> str:
     """Convert an internal ticker + exchange to TradingView format.
 
-    Strips Yahoo suffix and maps the exchange prefix.
+    Strips Yahoo suffix, maps the exchange prefix, and restores dot
+    notation for US dual-class shares.
 
     Examples:
-        ("DG.PA", "EPA")    -> "EURONEXT:DG"
-        ("EQNR.OL", "OSL") -> "OSL:EQNR"
-        ("AAPL", "NASDAQ")  -> "NASDAQ:AAPL"
+        ("DG.PA", "EPA")     -> "EURONEXT:DG"
+        ("EQNR.OL", "OSL")   -> "OSL:EQNR"
+        ("AAPL", "NASDAQ")   -> "NASDAQ:AAPL"
+        ("BRK-B", "NYSE")    -> "NYSE:BRK.B"
+        ("NOVO-B.CO", "CPH") -> "OMXCOP:NOVO-B"
     """
     tv_ticker = _strip_yahoo_suffix(ticker)
     tv_exchange = _map_tv_exchange(exchange)
+    tv_ticker = _restore_us_dual_class(tv_ticker, tv_exchange)
     return f"{tv_exchange}:{tv_ticker}"
 
 
