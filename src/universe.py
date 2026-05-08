@@ -72,7 +72,13 @@ def is_cache_valid(cache_path: Path, max_age_hours: int = 24) -> bool:
 
 
 def fetch_sp500_symbols() -> List[str]:
-    """Fetch S&P 500 symbols from Wikipedia."""
+    """Fetch S&P 500 symbols with REAL exchanges from NASDAQ/NYSE listings.
+
+    Wikipedia provides the membership list but no reliable exchange field.
+    We resolve each ticker against the authoritative NASDAQ/NYSE FTP listings
+    to avoid hardcoding NYSE: for tickers like AAPL that are actually on
+    NASDAQ. Members not found in the listings are dropped.
+    """
     cache_path = get_cache_path("sp500")
 
     if is_cache_valid(cache_path):
@@ -88,18 +94,31 @@ def fetch_sp500_symbols() -> List[str]:
         tables = pd.read_html(StringIO(response.text))
         df = tables[0]
 
+        ticker_to_exchange = _build_us_exchange_lookup()
+
         symbols = []
+        dropped = 0
         for _, row in df.iterrows():
-            symbol = row['Symbol'].replace('.', '-')  # BRK.B -> BRK-B for yfinance
-            exchange = "NYSE"
-            symbols.append(f"{exchange}:{symbol}")
+            symbol = str(row['Symbol']).replace('.', '-')  # BRK.B -> BRK-B for yfinance
+            exchange = ticker_to_exchange.get(symbol)
+            if exchange:
+                symbols.append(f"{exchange}:{symbol}")
+            else:
+                dropped += 1
+
+        if dropped:
+            logger.info(
+                "S&P 500: dropped %d tickers not in NASDAQ/NYSE listings",
+                dropped,
+            )
 
         with open(cache_path, 'w') as f:
             json.dump(symbols, f)
 
+        logger.info("Fetched %d S&P 500 symbols", len(symbols))
         return symbols
     except Exception as e:
-        print(f"Error fetching S&P 500: {e}")
+        logger.error("Error fetching S&P 500: %s", e)
         return []
 
 
@@ -238,8 +257,29 @@ def fetch_nyse_listed() -> List[str]:
         return []
 
 
+def _build_us_exchange_lookup() -> Dict[str, str]:
+    """Build a {ticker: exchange} lookup from NASDAQ + NYSE/AMEX/ARCA/BATS listings.
+
+    Used to resolve real exchanges for index members (S&P 500, Russell 3000)
+    that are otherwise sourced without exchange information.
+    """
+    lookup: Dict[str, str] = {}
+    for sym in fetch_nasdaq_listed() + fetch_nyse_listed():
+        if ':' in sym:
+            exch, tick = sym.split(':', 1)
+            lookup[tick] = exch
+    return lookup
+
+
 def fetch_russell3000_symbols() -> List[str]:
-    """Fetch Russell 3000 symbols (approximation via iShares ETF holdings)."""
+    """Fetch Russell 3000 symbols with REAL exchanges from NASDAQ/NYSE listings.
+
+    Uses iShares IWV ETF holdings as the membership proxy, then resolves each
+    ticker against the authoritative NASDAQ/NYSE FTP listings to attach the
+    correct exchange prefix. Tickers not found in the listings (OTC, delisted,
+    pending IPO) are dropped — Russell 3000 ⊂ NASDAQ ∪ NYSE/AMEX, so unmatched
+    entries would not resolve in TradingView either.
+    """
     cache_path = get_cache_path("russell3000")
 
     if is_cache_valid(cache_path):
@@ -253,8 +293,7 @@ def fetch_russell3000_symbols() -> List[str]:
         response = requests.get(url, headers=headers, timeout=60)
 
         if response.status_code != 200:
-            print(f"Could not fetch Russell 3000 holdings (status {response.status_code})")
-            # Fallback: use combined NASDAQ + NYSE as approximation
+            logger.error("Could not fetch Russell 3000 holdings (status %d)", response.status_code)
             return []
 
         # Parse CSV (skip metadata rows)
@@ -279,19 +318,34 @@ def fetch_russell3000_symbols() -> List[str]:
         if ticker_col is None:
             return []
 
+        ticker_to_exchange = _build_us_exchange_lookup()
+
         symbols = []
+        dropped = 0
         for ticker in df[ticker_col].dropna():
             ticker = str(ticker).strip()
-            if ticker and ticker != '-' and len(ticker) <= 5:
-                symbols.append(f"NYSE:{ticker}")  # Default exchange
+            if not ticker or ticker == '-' or len(ticker) > 5:
+                continue
+            ticker = ticker.replace('.', '-')  # yfinance compat (BRK.B -> BRK-B)
+            exchange = ticker_to_exchange.get(ticker)
+            if exchange:
+                symbols.append(f"{exchange}:{ticker}")
+            else:
+                dropped += 1
+
+        if dropped:
+            logger.info(
+                "Russell 3000: dropped %d tickers not in NASDAQ/NYSE listings",
+                dropped,
+            )
 
         with open(cache_path, 'w') as f:
             json.dump(symbols, f)
 
-        print(f"Fetched {len(symbols)} Russell 3000 symbols")
+        logger.info("Fetched %d Russell 3000 symbols", len(symbols))
         return symbols
     except Exception as e:
-        print(f"Error fetching Russell 3000: {e}")
+        logger.error("Error fetching Russell 3000: %s", e)
         return []
 
 

@@ -124,8 +124,13 @@ class TestMapTvExchange:
     def test_amex_unchanged(self):
         assert _map_tv_exchange("AMEX") == "AMEX"
 
-    def test_arca_unchanged(self):
-        assert _map_tv_exchange("ARCA") == "ARCA"
+    def test_arca_to_amex(self):
+        """NYSE Arca routes to AMEX in TradingView (legacy NYSE Arca → AMEX)."""
+        assert _map_tv_exchange("ARCA") == "AMEX"
+
+    def test_bats_to_amex(self):
+        """Cboe BZX (ex-BATS) routes to AMEX in TradingView."""
+        assert _map_tv_exchange("BATS") == "AMEX"
 
 
 # ── Unit tests: _to_tradingview_symbol ───────────────────────────────────
@@ -184,6 +189,34 @@ class TestToTradingviewSymbol:
     def test_us_stock_amex(self):
         """DNN on AMEX -> AMEX:DNN (no change)"""
         assert _to_tradingview_symbol("DNN", "AMEX") == "AMEX:DNN"
+
+    def test_arca_etf_to_amex(self):
+        """JPSE on ARCA -> AMEX:JPSE (Arca-listed ETFs resolve under AMEX)."""
+        assert _to_tradingview_symbol("JPSE", "ARCA") == "AMEX:JPSE"
+
+    def test_bats_to_amex(self):
+        """A BATS-listed equity routes to AMEX in TradingView."""
+        assert _to_tradingview_symbol("HVAC", "BATS") == "AMEX:HVAC"
+
+    def test_us_dual_class_share_nyse(self):
+        """BRK-B on NYSE -> NYSE:BRK.B (dot restored for TradingView)."""
+        assert _to_tradingview_symbol("BRK-B", "NYSE") == "NYSE:BRK.B"
+
+    def test_us_dual_class_share_nasdaq(self):
+        """LEN-B on NASDAQ -> NASDAQ:LEN.B (dot restored)."""
+        assert _to_tradingview_symbol("LEN-B", "NASDAQ") == "NASDAQ:LEN.B"
+
+    def test_us_dual_class_share_amex(self):
+        """A dual-class ticker on AMEX also gets the dot."""
+        assert _to_tradingview_symbol("BF-B", "AMEX") == "AMEX:BF.B"
+
+    def test_european_hyphen_preserved(self):
+        """NOVO-B on CPH -> OMXCOP:NOVO-B (hyphen preserved for non-US)."""
+        assert _to_tradingview_symbol("NOVO-B.CO", "CPH") == "OMXCOP:NOVO-B"
+
+    def test_european_hyphen_preserved_maersk(self):
+        """MAERSK-B on CPH keeps the hyphen."""
+        assert _to_tradingview_symbol("MAERSK-B.CO", "CPH") == "OMXCOP:MAERSK-B"
 
 
 # ── Integration: export_tradingview_watchlist ─────────────────────────────
